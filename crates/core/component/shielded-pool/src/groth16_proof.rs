@@ -38,7 +38,7 @@ mod tests {
     use shieldd_sdk_proto::shieldd::core::component::shielded_pool::v1 as pb;
 
     use super::decode;
-    use crate::{NoteReshapeProof, ShieldedIcs20WithdrawalProof, TransferProof};
+    use crate::{NoteReshapeProof, ShieldedWithdrawalProof, TransferProof};
 
     type G1 = <Bls12_377 as Pairing>::G1Affine;
     type G2 = <Bls12_377 as Pairing>::G2Affine;
@@ -65,10 +65,10 @@ mod tests {
             inner: bytes.to_vec(),
         })
         .expect("note reshape should accept canonical proof bytes");
-        ShieldedIcs20WithdrawalProof::try_from(pb::ZkShieldedIcs20WithdrawalProof {
+        ShieldedWithdrawalProof::try_from(pb::ZkShieldedWithdrawalProof {
             inner: bytes.to_vec(),
         })
-        .expect("shielded ICS-20 withdrawal should accept canonical proof bytes");
+        .expect("shielded withdrawal should accept canonical proof bytes");
     }
 
     fn assert_all_domain_decoders_reject(bytes: &[u8]) {
@@ -87,11 +87,11 @@ mod tests {
             "note reshape accepted a malformed proof"
         );
         assert!(
-            ShieldedIcs20WithdrawalProof::try_from(pb::ZkShieldedIcs20WithdrawalProof {
+            ShieldedWithdrawalProof::try_from(pb::ZkShieldedWithdrawalProof {
                 inner: bytes.to_vec()
             })
             .is_err(),
-            "shielded ICS-20 withdrawal accepted a malformed proof"
+            "shielded withdrawal accepted a malformed proof"
         );
     }
 

@@ -153,13 +153,13 @@ func (c *TransferCircuit) bindSemantic(name string, variables ...frontend.Variab
 	}
 }
 
-func (c *ShieldedIcs20WithdrawalCircuit) traceWiring(op string, args ...string) {
+func (c *ShieldedWithdrawalCircuit) traceWiring(op string, args ...string) {
 	if c.wiringTrace != nil {
 		c.wiringTrace.record(op, args...)
 	}
 }
 
-func (c *ShieldedIcs20WithdrawalCircuit) bindSemantic(
+func (c *ShieldedWithdrawalCircuit) bindSemantic(
 	name string,
 	variables ...frontend.Variable,
 ) {
@@ -192,7 +192,7 @@ func (c *TransferCircuit) bindWiringTrace(api frontend.API) {
 	}
 }
 
-func (c *ShieldedIcs20WithdrawalCircuit) bindWiringTrace(api frontend.API) {
+func (c *ShieldedWithdrawalCircuit) bindWiringTrace(api frontend.API) {
 	if c.wiringTrace != nil {
 		c.wiringTrace.bindCompiler(api.Compiler())
 	}
@@ -210,11 +210,11 @@ func noteReshapeCircuitWithTranscript(label string, nIn, nOut int, transcript *W
 	return circuit
 }
 
-func shieldedIcs20WithdrawalCircuitWithTranscript(
+func shieldedWithdrawalCircuitWithTranscript(
 	nIn int,
 	transcript *WiringTranscript,
 ) frontend.Circuit {
-	circuit := NewShieldedIcs20WithdrawalCircuit(nIn)
+	circuit := NewShieldedWithdrawalCircuit(nIn)
 	circuit.wiringTrace = transcript
 	return circuit
 }
@@ -264,9 +264,9 @@ func ExportTransferWiringTranscript() (string, error) {
 	return transcript.canonical()
 }
 
-// ExportShieldedIcs20WithdrawalWiringTranscript returns the canonical
+// ExportShieldedWithdrawalWiringTranscript returns the canonical
 // transcript for the registered withdrawal Define path.
-func ExportShieldedIcs20WithdrawalWiringTranscript(
+func ExportShieldedWithdrawalWiringTranscript(
 	label string,
 	nIn int,
 ) (string, error) {
@@ -274,7 +274,7 @@ func ExportShieldedIcs20WithdrawalWiringTranscript(
 	if _, err := frontend.Compile(
 		ecc.BLS12_377.ScalarField(),
 		r1cs.NewBuilder,
-		shieldedIcs20WithdrawalCircuitWithTranscript(nIn, transcript),
+		shieldedWithdrawalCircuitWithTranscript(nIn, transcript),
 	); err != nil {
 		return "", fmt.Errorf("compile %s for wiring transcript: %w", label, err)
 	}
@@ -411,11 +411,11 @@ func ExportTransferConstraintManifest(sr1csPath string) (*ConstraintManifest, er
 	return manifest, nil
 }
 
-func ExportShieldedIcs20WithdrawalConstraintManifest(
+func ExportShieldedWithdrawalConstraintManifest(
 	sr1csPath string,
 ) (*ConstraintManifest, error) {
-	_, manifest, err := CompileShieldedIcs20WithdrawalForExport(
-		"shielded_ics20_withdrawal",
+	_, manifest, err := CompileShieldedWithdrawalForExport(
+		"shielded_withdrawal",
 		2,
 	)
 	if err != nil {
@@ -466,14 +466,14 @@ func CompileTransferForExport() (constraint.ConstraintSystem, *ConstraintManifes
 	return ccs, manifest, nil
 }
 
-// CompileShieldedIcs20WithdrawalForExport returns the circuit and semantic manifest.
-func CompileShieldedIcs20WithdrawalForExport(
+// CompileShieldedWithdrawalForExport returns the circuit and semantic manifest.
+func CompileShieldedWithdrawalForExport(
 	label string,
 	nIn int,
 ) (constraint.ConstraintSystem, *ConstraintManifest, error) {
 	transcript := newWiringTranscript(label, nIn, 1)
 	transcript.recordCounts = true
-	circuit := shieldedIcs20WithdrawalCircuitWithTranscript(nIn, transcript)
+	circuit := shieldedWithdrawalCircuitWithTranscript(nIn, transcript)
 	ccs, err := frontend.Compile(
 		ecc.BLS12_377.ScalarField(),
 		r1cs.NewBuilder,

@@ -197,7 +197,6 @@ ExtractedComplianceCiphertext { output_ref, routing_tags, raw_bytes, metadata_by
 | `scanner_detections` | DK-detected private outputs and audit status |
 | `scanner_invalid_ciphertexts` | bounded malformed rows |
 | `scanner_invalid_ciphertext_summaries` | overflow counts |
-| `scanner_clear_flows` | public shield/withdraw projections |
 | `scanner_sync` | replay cursor |
 | `compliance_evidence_objects` | canonical evidence bytes |
 | `audit_rows` | normalized audit projection |

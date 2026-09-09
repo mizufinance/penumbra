@@ -17,7 +17,7 @@ flowchart TD
 
 | Boundary | Responsibility |
 | --- | --- |
-| Bankd | Canonical transaction location, block ordering, authorization, deposits and withdrawal settlement |
+| Bankd | Canonical transaction location, block ordering, authorization, deposits, withdrawal settlement and IBC execution |
 | `ExecutionService` / C ABI | Decode typed requests, map errors, own the embedded runtime and expose committed queries |
 | `HostExecution` | Enforce legal genesis/begin/deliver/end/commit/rollback phases and bind replay-protected host effects |
 | `App` and components | Verify transactions, execute in order, publish roots and compact data atomically |
@@ -35,7 +35,8 @@ native proof construction; `bundled-proving-keys` also enables `prover`. Scanner
 storage is independent of validator component storage. View’s `rpc` feature adds
 the historical-witness RPC adapter.
 
-IBC client verification, relay, and ICS20 withdrawal still execute in Shieldd.
+Bankd owns IBC clients, channels, packets and relay. Shieldd withdrawals carry
+a host transfer or execution destination and use the `shielded_withdrawal` proof.
 Batch preparation/validation are Rust library capabilities; the C header defines
 the exported surface. See [integration](embedded-artifacts.md), [state](state.md),
 and [wallet](wallet.md) for each boundary’s details.

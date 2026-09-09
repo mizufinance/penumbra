@@ -1,4 +1,4 @@
-//! Fixed-shape sender ciphertext for regulated host and ICS-20 withdrawals.
+//! Fixed-shape sender ciphertext for regulated host withdrawals.
 
 use anyhow::{anyhow, ensure, Context, Result};
 use decaf377::{Element, Fq, Fr};

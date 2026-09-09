@@ -16,7 +16,6 @@ component = [
   "shieldd-sdk-compact-block/component",
   "shieldd-sdk-compliance/component",
   "shieldd-sdk-fee/component",
-  "shieldd-sdk-ibc/component",
   "shieldd-sdk-sct/component",
   "shieldd-sdk-shielded-pool/component",
 ]
@@ -26,14 +25,13 @@ parallel = [
   "shieldd-sdk-sct/parallel",
 ]
 benchmark-helpers = [
-  "shieldd-sdk-ibc/benchmark-helpers",
   "shieldd-sdk-shielded-pool/benchmark-helpers",
 ]
 default = ["std", "component"]
 fuzzing = []
 # Insecure isolated integration only; never enable in production.
 orbis-dev-srs = []
-std     = ["ark-ff/std", "ibc-types/std"]
+std     = ["ark-ff/std"]
 
 [dependencies]
 anyhow                           = { workspace = true }
@@ -49,7 +47,6 @@ decaf377                         = { workspace = true, default-features = true }
 decaf377-rdsa                    = { workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
-ibc-types                        = { workspace = true, default-features = false }
 jmt                              = { workspace = true }
 metrics                          = { workspace = true }
 once_cell                        = { workspace = true }
@@ -58,7 +55,6 @@ shieldd-sdk-asset                   = { workspace = true, default-features = tru
 shieldd-sdk-compact-block           = { workspace = true, default-features = false }
 shieldd-sdk-compliance              = { workspace = true, default-features = false }
 shieldd-sdk-fee                     = { workspace = true, default-features = false }
-shieldd-sdk-ibc                     = { workspace = true, default-features = false }
 shieldd-sdk-keys                    = { workspace = true, default-features = true }
 shieldd-sdk-num                     = { workspace = true, default-features = true }
 shieldd-sdk-proof-params            = { workspace = true, default-features = false }

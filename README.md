@@ -3,13 +3,13 @@
 Shieldd is Bankd’s embedded private execution subsystem, forked from Penumbra.
 It owns shielded notes, nullifiers, proof verification, compliance commitments,
 and compact wallet/auditor data. Bankd owns consensus, issuer authorization,
-asset accounting, escrow settlement, public queries, and transaction submission.
+asset accounting, escrow settlement, IBC execution, public queries, and transaction submission.
 Both are active prototypes.
 
 Bankd calls `HostExecution` through the `shieldd` static library’s C ABI. Shieldd
 also provides wallet planning and synchronization libraries, an issuer scanner,
-native proof builders, and offline `pcli` custody/key tools. IBC relay and ICS20
-withdrawal execution remain implemented in Shieldd.
+native proof builders, and offline `pcli` custody/key tools. Shielded withdrawals
+return value to Bankd through a host transfer or host execution.
 
 Regulated participation uses asset policy and per-address/per-asset lifecycle
 commitments. Fees use the base asset. The `SeizeNote` host call verifies recovery

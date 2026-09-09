@@ -2,14 +2,10 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use shieldd_sdk_ibc::IbcRelay;
 use shieldd_sdk_keys::{Address, FullViewingKey, PayloadKey};
 use shieldd_sdk_proto::{core::transaction::v1 as pb, DomainType};
 use shieldd_sdk_sct::nullifier_generation::NullifierWindow;
-use shieldd_sdk_shielded_pool::{
-    HostWithdrawal, Ics20Withdrawal, ShieldedHostWithdrawalPlan, ShieldedIcs20WithdrawalPlan,
-    TransferPlan,
-};
+use shieldd_sdk_shielded_pool::{HostWithdrawal, ShieldedHostWithdrawalPlan, TransferPlan};
 use shieldd_sdk_txhash::{EffectHash, EffectingData};
 
 mod action;
@@ -47,9 +43,7 @@ impl TransactionPlan {
             .filter_map(|action| match action {
                 ActionPlan::Transfer(plan) => Some((&plan.spends, &plan.compliance.witness)),
                 ActionPlan::NoteReshape(plan) => Some((&plan.spends, &plan.compliance.witness)),
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => {
-                    Some((&plan.spends, &plan.compliance.witness))
-                }
+
                 ActionPlan::ShieldedHostWithdrawal(plan) => {
                     Some((&plan.spends, &plan.compliance.witness))
                 }
@@ -120,38 +114,6 @@ impl TransactionPlan {
         })
     }
 
-    pub fn ibc_actions(&self) -> impl Iterator<Item = &IbcRelay> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::IbcAction(action) = action {
-                Some(action)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn shielded_ics20_withdrawal_plans(
-        &self,
-    ) -> impl Iterator<Item = &ShieldedIcs20WithdrawalPlan> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ShieldedIcs20Withdrawal(plan) = action {
-                Some(plan)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn ics20_withdrawals(&self) -> impl Iterator<Item = &Ics20Withdrawal> {
-        self.actions.iter().filter_map(|action| {
-            if let ActionPlan::ShieldedIcs20Withdrawal(plan) = action {
-                Some(&plan.withdrawal)
-            } else {
-                None
-            }
-        })
-    }
-
     pub fn shielded_host_withdrawal_plans(
         &self,
     ) -> impl Iterator<Item = &ShieldedHostWithdrawalPlan> {
@@ -175,23 +137,22 @@ impl TransactionPlan {
     }
 
     pub fn dest_addresses(&self) -> Vec<Address> {
-        let mut addresses = self
-            .actions
-            .iter()
-            .flat_map(|action| match action {
-                ActionPlan::Transfer(plan) => plan.dest_addresses().collect::<Vec<_>>(),
-                ActionPlan::NoteReshape(plan) => plan
-                    .outputs
-                    .iter()
-                    .map(|output| output.dest_address.clone())
-                    .collect::<Vec<_>>(),
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => vec![plan.created_output_address()],
-                ActionPlan::ShieldedHostWithdrawal(plan) => vec![plan.created_output_address()],
-                ActionPlan::IbcAction(_)
-                | ActionPlan::ComplianceRegisterAsset(_)
-                | ActionPlan::ComplianceRegisterUser(_) => Vec::new(),
-            })
-            .collect::<Vec<_>>();
+        let mut addresses =
+            self.actions
+                .iter()
+                .flat_map(|action| match action {
+                    ActionPlan::Transfer(plan) => plan.dest_addresses().collect::<Vec<_>>(),
+                    ActionPlan::NoteReshape(plan) => plan
+                        .outputs
+                        .iter()
+                        .map(|output| output.dest_address.clone())
+                        .collect::<Vec<_>>(),
+
+                    ActionPlan::ShieldedHostWithdrawal(plan) => vec![plan.created_output_address()],
+                    ActionPlan::ComplianceRegisterAsset(_)
+                    | ActionPlan::ComplianceRegisterUser(_) => Vec::new(),
+                })
+                .collect::<Vec<_>>();
 
         if let Some(fee_funding) = &self.fee_funding {
             addresses.extend(
@@ -213,11 +174,9 @@ impl TransactionPlan {
             .map(|action| match action {
                 ActionPlan::Transfer(plan) => plan.num_outputs(),
                 ActionPlan::NoteReshape(plan) => plan.family_id().output_count(),
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => plan.note_creating_output_count(),
+
                 ActionPlan::ShieldedHostWithdrawal(plan) => plan.note_creating_output_count(),
-                ActionPlan::IbcAction(_)
-                | ActionPlan::ComplianceRegisterAsset(_)
-                | ActionPlan::ComplianceRegisterUser(_) => 0,
+                ActionPlan::ComplianceRegisterAsset(_) | ActionPlan::ComplianceRegisterUser(_) => 0,
             })
             .sum::<usize>();
 
@@ -267,11 +226,8 @@ impl TransactionPlan {
             .map(|action| match action {
                 ActionPlan::Transfer(_)
                 | ActionPlan::NoteReshape(_)
-                | ActionPlan::ShieldedIcs20Withdrawal(_)
                 | ActionPlan::ShieldedHostWithdrawal(_) => 1,
-                ActionPlan::IbcAction(_)
-                | ActionPlan::ComplianceRegisterAsset(_)
-                | ActionPlan::ComplianceRegisterUser(_) => 0,
+                ActionPlan::ComplianceRegisterAsset(_) | ActionPlan::ComplianceRegisterUser(_) => 0,
             })
             .sum::<usize>();
 
@@ -325,20 +281,17 @@ mod tests {
     use super::*;
     use crate::{Transaction, TransactionBody};
     use decaf377::Fr;
-    use ibc_types::core::channel::ChannelId;
-    use ibc_types::core::client::Height as IbcHeight;
     use rand_core::OsRng;
     use shieldd_sdk_asset::{Value, BASE_ASSET_ID};
     use shieldd_sdk_keys::keys::{AddressIndex, Bip44Path, SeedPhrase, SpendKey};
     use shieldd_sdk_keys::test_keys;
     use shieldd_sdk_shielded_pool::{
         discovery::{Parameters, Precision},
-        HostTransfer, HostWithdrawalDestination, Ics20Withdrawal, Note, NoteReshape,
-        NoteReshapeFamilyId, NoteReshapeProof, RecoveryCommitment, Rseed, ShieldedInputPlan,
-        ShieldedOutputPlan,
+        HostTransfer, HostWithdrawalDestination, Note, NoteReshape, NoteReshapeFamilyId,
+        NoteReshapeProof, RecoveryCommitment, Rseed, ShieldedInputPlan, ShieldedOutputPlan,
     };
     use shieldd_sdk_txhash::EffectHash;
-    use std::{ops::Deref, str::FromStr};
+    use std::ops::Deref;
 
     fn note_reshape_eight_by_one_fixture() -> (TransactionPlan, Transaction) {
         let mut rng = OsRng;
@@ -499,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn shielded_ics20_withdrawal_counts_change_output_for_routing() {
+    fn shielded_withdrawal_counts_change_output_for_routing() {
         let parameters =
             Parameters::new(Precision::new(12).unwrap(), Precision::new(18).unwrap(), 42).unwrap();
 
@@ -518,21 +471,19 @@ mod tests {
             change_value,
             test_keys::ADDRESS_0.deref().clone(),
         );
-        let withdrawal = Ics20Withdrawal {
-            amount: 40_000u64.into(),
-            denom: shieldd_sdk_asset::BASE_ASSET_DENOM.clone(),
-            destination_chain_address: "cosmos1destination".to_string(),
-            return_address: test_keys::ADDRESS_0.deref().clone(),
-            timeout_height: IbcHeight::new(1, 10).expect("valid timeout height"),
-            timeout_time: 60_000_000_000,
-            source_channel: ChannelId::from_str("channel-0").expect("valid channel id"),
-            ics20_memo: String::new(),
-            use_transparent_address: false,
+        let withdrawal = shieldd_sdk_shielded_pool::HostWithdrawal {
+            value: Value {
+                amount: 40_000u64.into(),
+                asset_id: *BASE_ASSET_ID,
+            },
+            destination: HostWithdrawalDestination::Transfer(HostTransfer {
+                recipient: "bank1destination".to_owned(),
+            }),
         };
 
         let withdrawal = {
             let context = shieldd_sdk_shielded_pool::test_plan_helpers::withdrawal_context(&spend);
-            shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalPlan::new(
+            shieldd_sdk_shielded_pool::ShieldedHostWithdrawalPlan::new(
                 vec![spend],
                 Some(change),
                 withdrawal,
@@ -545,7 +496,7 @@ mod tests {
         .expect("plan should be valid");
 
         let plan = TransactionPlan {
-            actions: vec![ActionPlan::ShieldedIcs20Withdrawal(withdrawal)],
+            actions: vec![ActionPlan::ShieldedHostWithdrawal(withdrawal)],
             transaction_parameters: Default::default(),
             fee_funding: None,
             memo: None,
@@ -559,13 +510,13 @@ mod tests {
         );
         assert!(matches!(
             &plan.actions[0],
-            ActionPlan::ShieldedIcs20Withdrawal(withdrawal)
+            ActionPlan::ShieldedHostWithdrawal(withdrawal)
                 if withdrawal.routing_parameters == parameters
         ));
     }
 
     #[test]
-    fn shielded_ics20_withdrawal_without_explicit_change_still_counts_hidden_routing_note() {
+    fn shielded_withdrawal_without_explicit_change_still_counts_hidden_routing_note() {
         let parameters =
             Parameters::new(Precision::new(10).unwrap(), Precision::new(14).unwrap(), 42).unwrap();
 
@@ -575,21 +526,19 @@ mod tests {
         };
         let note = Note::generate(&mut OsRng, &test_keys::ADDRESS_0, spend_value);
         let spend = ShieldedInputPlan::new(&mut OsRng, note, 0u64.into());
-        let withdrawal = Ics20Withdrawal {
-            amount: 40_000u64.into(),
-            denom: shieldd_sdk_asset::BASE_ASSET_DENOM.clone(),
-            destination_chain_address: "cosmos1destination".to_string(),
-            return_address: test_keys::ADDRESS_0.deref().clone(),
-            timeout_height: IbcHeight::new(1, 10).expect("valid timeout height"),
-            timeout_time: 60_000_000_000,
-            source_channel: ChannelId::from_str("channel-0").expect("valid channel id"),
-            ics20_memo: String::new(),
-            use_transparent_address: false,
+        let withdrawal = shieldd_sdk_shielded_pool::HostWithdrawal {
+            value: Value {
+                amount: 40_000u64.into(),
+                asset_id: *BASE_ASSET_ID,
+            },
+            destination: HostWithdrawalDestination::Transfer(HostTransfer {
+                recipient: "bank1destination".to_owned(),
+            }),
         };
 
         let withdrawal = {
             let context = shieldd_sdk_shielded_pool::test_plan_helpers::withdrawal_context(&spend);
-            shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalPlan::new(
+            shieldd_sdk_shielded_pool::ShieldedHostWithdrawalPlan::new(
                 vec![spend],
                 None,
                 withdrawal,
@@ -602,7 +551,7 @@ mod tests {
         .expect("plan should be valid");
 
         let plan = TransactionPlan {
-            actions: vec![ActionPlan::ShieldedIcs20Withdrawal(withdrawal)],
+            actions: vec![ActionPlan::ShieldedHostWithdrawal(withdrawal)],
             transaction_parameters: Default::default(),
             fee_funding: None,
             memo: None,
@@ -616,7 +565,7 @@ mod tests {
         );
         assert!(matches!(
             &plan.actions[0],
-            ActionPlan::ShieldedIcs20Withdrawal(withdrawal)
+            ActionPlan::ShieldedHostWithdrawal(withdrawal)
                 if withdrawal.routing_parameters == parameters
         ));
     }

@@ -16,11 +16,6 @@ use super::StateWriteExt;
 use crate::state_key;
 use crate::{Note, NotePayload, Rseed, VolumeAccumulatorPayload};
 
-#[cfg(feature = "benchmark-helpers")]
-use shieldd_sdk_ibc::benchmarking::{record_inbound_stage, InboundStage};
-#[cfg(feature = "benchmark-helpers")]
-use std::time::Instant;
-
 /// Manages the addition of new notes to the chain state.
 #[async_trait]
 pub trait NoteManager: StateWrite + StateReadExt + ComplianceRegistryRead {
@@ -36,9 +31,6 @@ pub trait NoteManager: StateWrite + StateReadExt + ComplianceRegistryRead {
         address: &Address,
         source: CommitmentSource,
     ) -> Result<()> {
-        #[cfg(feature = "benchmark-helpers")]
-        let mint_note_start = Instant::now();
-
         tracing::debug!(?value, ?address, "minting tokens");
         let recovery_capk = if self.is_asset_regulated(value.asset_id).await? {
             let leaf = self
@@ -61,37 +53,20 @@ pub trait NoteManager: StateWrite + StateReadExt + ComplianceRegistryRead {
         // Hashing the current SCT root would be sufficient, since it will
         // change every time we insert a new note.  But computing the SCT root
         // is very slow, so instead we hash the current position.
-        #[cfg(feature = "benchmark-helpers")]
-        let sct_append_start = Instant::now();
+
         let source_for_append = source.clone();
         let (position, note_payload) = self
             .add_sct_commitment_from_position(source_for_append, |position| {
-                #[cfg(feature = "benchmark-helpers")]
-                let note_build_start = Instant::now();
                 let note_payload =
                     build_position_derived_mint_payload(value, address, position, recovery_capk)?;
-                #[cfg(feature = "benchmark-helpers")]
-                record_inbound_stage(InboundStage::MintNoteBuild, note_build_start.elapsed());
 
                 Ok((note_payload.note_commitment, note_payload))
             })
             .await?;
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(InboundStage::MintNoteSctAppend, sct_append_start.elapsed());
 
-        #[cfg(feature = "benchmark-helpers")]
-        let pending_payload_start = Instant::now();
         let mut payloads = self.pending_note_payloads();
         payloads.push_back((position, note_payload, source));
         self.object_put(state_key::pending_notes(), payloads);
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(
-            InboundStage::MintNotePendingPayload,
-            pending_payload_start.elapsed(),
-        );
-
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(InboundStage::MintNoteTotal, mint_note_start.elapsed());
 
         Ok(())
     }
@@ -102,26 +77,17 @@ pub trait NoteManager: StateWrite + StateReadExt + ComplianceRegistryRead {
 
         // Action handlers emit semantic note-created/nullifier-spent events.
         // NoteManager only stages SCT and compact-block state.
-        #[cfg(feature = "benchmark-helpers")]
-        let sct_insert_start = Instant::now();
+
         let position = self.add_sct_commitment(note_payload.note_commitment, source.clone())
             .await
             // TODO: why? can't we exceed the number of state commitments in a block?
             .expect("inserting into the state commitment tree should not fail because we should budget commitments per block (currently unimplemented)");
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(InboundStage::MintNoteSctAppend, sct_insert_start.elapsed());
 
         // Queue the payload for compact-block emission after SCT insertion.
-        #[cfg(feature = "benchmark-helpers")]
-        let pending_payload_start = Instant::now();
+
         let mut payloads = self.pending_note_payloads();
         payloads.push_back((position, note_payload, source));
         self.object_put(state_key::pending_notes(), payloads);
-        #[cfg(feature = "benchmark-helpers")]
-        record_inbound_stage(
-            InboundStage::MintNotePendingPayload,
-            pending_payload_start.elapsed(),
-        );
     }
 
     #[instrument(skip(self, note_commitment))]

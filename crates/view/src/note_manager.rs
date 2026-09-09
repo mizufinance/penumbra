@@ -15,8 +15,7 @@ use shieldd_sdk_num::Amount;
 use shieldd_sdk_proto::view::v1::NotesRequest;
 use shieldd_sdk_sct::nullifier_generation::NullifierWindow;
 use shieldd_sdk_shielded_pool::{
-    note, HostWithdrawal, Ics20Withdrawal, NoteReshapeFamilyId, ShieldedInputPlan,
-    ShieldedOutputPlan,
+    note, HostWithdrawal, NoteReshapeFamilyId, ShieldedInputPlan, ShieldedOutputPlan,
 };
 use shieldd_sdk_transaction::{
     memo::MemoPlaintext,
@@ -34,12 +33,6 @@ pub struct TransferResumeToken {
     pub source: AddressIndex,
     pub recipient: Address,
     pub value: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct Ics20WithdrawalResumeToken {
-    pub source: AddressIndex,
-    pub withdrawal: Ics20Withdrawal,
 }
 
 #[derive(Clone, Debug)]
@@ -66,56 +59,9 @@ pub struct NoteReshapeResumeToken {
 #[derive(Clone, Debug)]
 pub enum NoteManagerResumeToken {
     Transfer(TransferResumeToken),
-    Ics20Withdrawal(Ics20WithdrawalResumeToken),
     HostWithdrawal(HostWithdrawalResumeToken),
     ActionFunding(ActionFundingResumeToken),
     NoteReshape(NoteReshapeResumeToken),
-}
-
-#[derive(Clone, Debug)]
-enum WalletWithdrawal {
-    Ics20(Ics20Withdrawal),
-    Host(HostWithdrawal),
-}
-
-impl WalletWithdrawal {
-    fn amount(&self) -> Amount {
-        match self {
-            Self::Ics20(withdrawal) => withdrawal.amount,
-            Self::Host(withdrawal) => withdrawal.value.amount,
-        }
-    }
-
-    fn asset_id(&self) -> asset::Id {
-        match self {
-            Self::Ics20(withdrawal) => withdrawal.denom.id(),
-            Self::Host(withdrawal) => withdrawal.value.asset_id,
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Ics20(_) => "ICS-20 withdrawal",
-            Self::Host(_) => "host withdrawal",
-        }
-    }
-
-    fn resume_token(&self, source: AddressIndex) -> NoteManagerResumeToken {
-        match self {
-            Self::Ics20(withdrawal) => {
-                NoteManagerResumeToken::Ics20Withdrawal(Ics20WithdrawalResumeToken {
-                    source,
-                    withdrawal: withdrawal.clone(),
-                })
-            }
-            Self::Host(withdrawal) => {
-                NoteManagerResumeToken::HostWithdrawal(HostWithdrawalResumeToken {
-                    source,
-                    withdrawal: withdrawal.clone(),
-                })
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -446,9 +392,7 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
     ) -> Result<NoteManagerPlanningResult> {
         match resume_token {
             NoteManagerResumeToken::Transfer(token) => self.resume_transfer(view, token).await,
-            NoteManagerResumeToken::Ics20Withdrawal(token) => {
-                self.resume_ics20_withdrawal(view, token).await
-            }
+
             NoteManagerResumeToken::HostWithdrawal(token) => {
                 self.resume_host_withdrawal(view, token).await
             }
@@ -530,38 +474,18 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             .await
     }
 
-    pub async fn plan_ics20_withdrawal<V: PlanningIo + Send + ?Sized>(
-        &mut self,
-        view: &mut V,
-        source: AddressIndex,
-        withdrawal: Ics20Withdrawal,
-    ) -> Result<NoteManagerPlanningResult> {
-        self.plan_wallet_withdrawal(view, source, WalletWithdrawal::Ics20(withdrawal))
-            .await
-    }
-
     pub async fn plan_host_withdrawal<V: PlanningIo + Send + ?Sized>(
         &mut self,
         view: &mut V,
         source: AddressIndex,
         withdrawal: HostWithdrawal,
     ) -> Result<NoteManagerPlanningResult> {
-        self.plan_wallet_withdrawal(view, source, WalletWithdrawal::Host(withdrawal))
-            .await
-    }
-
-    async fn plan_wallet_withdrawal<V: PlanningIo + Send + ?Sized>(
-        &mut self,
-        view: &mut V,
-        source: AddressIndex,
-        withdrawal: WalletWithdrawal,
-    ) -> Result<NoteManagerPlanningResult> {
         let gas_prices = self
             .gas_prices
             .context("note manager instances must call set_gas_prices prior to planning")?;
-        let asset_id = withdrawal.asset_id();
-        let withdrawal_amount = withdrawal.amount();
-        let label = withdrawal.label();
+        let asset_id = withdrawal.value.asset_id;
+        let withdrawal_amount = withdrawal.value.amount;
+        let label = "host withdrawal";
 
         if let Some(result) = ensure_base_gas_prices(gas_prices) {
             return Ok(result);
@@ -594,7 +518,10 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
                 return Ok(NoteManagerPlanningResult::InsufficientBalance);
             }
 
-            let resume_token = withdrawal.resume_token(source);
+            let resume_token = NoteManagerResumeToken::HostWithdrawal(HostWithdrawalResumeToken {
+                source,
+                withdrawal: withdrawal.clone(),
+            });
             let action_needs_maintenance = selected.len() > 2;
             let excluded_fee_notes = selected_note_commitments(&selected);
             let fee_funding_selection = if gas_prices_are_zero(gas_prices) {
@@ -722,15 +649,6 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
         }
 
         Err(anyhow!("{label} planning did not converge"))
-    }
-
-    pub async fn resume_ics20_withdrawal<V: PlanningIo + Send + ?Sized>(
-        &mut self,
-        view: &mut V,
-        resume_token: Ics20WithdrawalResumeToken,
-    ) -> Result<NoteManagerPlanningResult> {
-        self.plan_ics20_withdrawal(view, resume_token.source, resume_token.withdrawal)
-            .await
     }
 
     pub async fn resume_host_withdrawal<V: PlanningIo + Send + ?Sized>(
@@ -1336,12 +1254,12 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
     fn build_wallet_withdrawal_action(
         &mut self,
         selected: &[SpendableNoteRecord],
-        withdrawal: WalletWithdrawal,
+        withdrawal: HostWithdrawal,
         fee: Fee,
     ) -> Result<ActionIntent> {
-        let label = withdrawal.label();
-        let withdrawal_amount = withdrawal.amount();
-        let asset_id = withdrawal.asset_id();
+        let label = "host withdrawal";
+        let withdrawal_amount = withdrawal.value.amount;
+        let asset_id = withdrawal.value.asset_id;
         let sender_address = selected
             .first()
             .map(|record| record.note.address())
@@ -1378,22 +1296,12 @@ impl<R: RngCore + CryptoRng> NoteManager<R> {
             None
         };
         let value_blinding = Fr::rand(&mut self.rng);
-        Ok(match withdrawal {
-            WalletWithdrawal::Ics20(withdrawal) => {
-                ActionIntent::Ics20Withdrawal(WithdrawalIntent {
-                    spends,
-                    change_output,
-                    withdrawal,
-                    value_blinding,
-                })
-            }
-            WalletWithdrawal::Host(withdrawal) => ActionIntent::HostWithdrawal(WithdrawalIntent {
-                spends,
-                change_output,
-                withdrawal,
-                value_blinding,
-            }),
-        })
+        Ok(ActionIntent::HostWithdrawal(WithdrawalIntent {
+            spends,
+            change_output,
+            withdrawal,
+            value_blinding,
+        }))
     }
 
     async fn load_notes_for_asset<V: PlanningIo + Send + ?Sized>(
@@ -1619,11 +1527,9 @@ fn select_notes_covering(
 mod tests {
     use super::*;
     use decaf377::Fq;
-    use ibc_types::core::{channel::ChannelId, client::Height as IbcHeight};
     use rand_core::OsRng;
     use shieldd_sdk_asset::BASE_ASSET_ID;
     use shieldd_sdk_fee::GasPrices;
-    use shieldd_sdk_ibc::IbcRelay;
     use shieldd_sdk_keys::keys::SeedPhrase;
     use shieldd_sdk_keys::keys::{AddressIndex, Bip44Path, SpendKey};
     use shieldd_sdk_keys::symmetric::PayloadKey;
@@ -1635,7 +1541,6 @@ mod tests {
     use shieldd_sdk_transaction::gas::GasCost;
     use shieldd_sdk_transaction::plan::ActionPlan;
     use std::collections::BTreeMap;
-    use std::str::FromStr;
     use std::sync::{Arc, Mutex};
 
     fn test_address(index: u32) -> Address {
@@ -1700,22 +1605,15 @@ mod tests {
         }
     }
 
-    fn test_ics20_withdrawal(amount: u64, return_address: Address) -> Ics20Withdrawal {
-        Ics20Withdrawal {
-            amount: amount.into(),
-            denom: shieldd_sdk_asset::asset::Metadata::try_from("ushieldd")
-                .expect("valid base-asset metadata"),
-            destination_chain_address: "cosmos1deadbeefdeadbeefdeadbeefdeadbeef7a8n3x".to_string(),
-            return_address,
-            timeout_height: IbcHeight {
-                revision_number: 0,
-                revision_height: 10,
-            },
-            timeout_time: 60_000_000_000,
-            source_channel: ChannelId::from_str("channel-0").expect("valid channel id"),
-            ics20_memo: String::new(),
-            use_transparent_address: false,
-        }
+    fn test_compliance_action() -> ActionPlan {
+        ActionPlan::ComplianceRegisterUser(shieldd_sdk_compliance::structs::MsgRegisterUser {
+            leaf: shieldd_sdk_compliance::ComplianceLeaf::synthetic_unregulated(
+                test_address(34),
+                *BASE_ASSET_ID,
+            ),
+            grant: None,
+            capability_certificate: None,
+        })
     }
 
     fn test_host_withdrawal(amount: u64, recipient: &str) -> HostWithdrawal {
@@ -1728,13 +1626,6 @@ mod tests {
                 recipient: recipient.to_owned(),
             }),
         }
-    }
-
-    fn test_ibc_action() -> IbcRelay {
-        IbcRelay::Unknown(pbjson_types::Any {
-            type_url: "/shieldd.test.ibc".to_owned(),
-            value: vec![1, 2, 3].into(),
-        })
     }
 
     fn assert_action_only_plan(
@@ -1979,82 +1870,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ics20_withdrawal_ready_produces_wallet_facing_action_only() {
-        let mut rng = OsRng;
-        let source = AddressIndex::new(0);
-        let sender = test_address(20);
-        let return_address = test_address(21);
-        let mut view = funded_view(&mut rng, source, sender, &[7, 5]);
-
-        let mut note_manager = NoteManager::new(OsRng);
-        note_manager.set_gas_prices(GasPrices::zero());
-
-        let result = note_manager
-            .plan_ics20_withdrawal(&mut view, source, test_ics20_withdrawal(10, return_address))
-            .await
-            .expect("ICS-20 withdrawal planning succeeds");
-
-        let NoteManagerPlanningResult::Ready { transaction_plan } = result else {
-            panic!("expected ready ICS-20 withdrawal plan");
-        };
-        assert_eq!(transaction_plan.actions.len(), 1);
-        assert!(matches!(
-            transaction_plan.actions.first(),
-            Some(ActionPlan::ShieldedIcs20Withdrawal(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn fragmented_ics20_withdrawal_requests_note_reshape_then_resume_builds_action() {
-        let mut rng = OsRng;
-        let source = AddressIndex::new(0);
-        let sender = test_address(22);
-        let return_address = test_address(23);
-        let mut view = funded_view(&mut rng, source, sender, &[4, 3, 2, 1]);
-        let mut note_manager = NoteManager::new(OsRng);
-        note_manager.set_gas_prices(GasPrices::zero());
-
-        let result = note_manager
-            .plan_ics20_withdrawal(&mut view, source, test_ics20_withdrawal(10, return_address))
-            .await
-            .expect("ICS-20 withdrawal planning succeeds");
-
-        let (maintenance_plan, resume_token) = match result {
-            NoteManagerPlanningResult::NeedsMaintenance {
-                maintenance_plan,
-                resume_token,
-            } => (maintenance_plan, resume_token),
-            _ => panic!("expected maintenance result"),
-        };
-        assert!(matches!(
-            maintenance_plan.actions.first(),
-            Some(ActionPlan::NoteReshape(note_reshape))
-                if note_reshape.family_id() == NoteReshapeFamilyId::EightByOne
-        ));
-
-        view.replace_notes(vec![spendable_note_record(
-            &mut rng,
-            10,
-            source,
-            test_address(22),
-            5,
-        )]);
-
-        let resumed = note_manager
-            .resume(&mut view, resume_token)
-            .await
-            .expect("resume succeeds");
-
-        let NoteManagerPlanningResult::Ready { transaction_plan } = resumed else {
-            panic!("expected resumed ICS-20 withdrawal to be ready");
-        };
-        assert!(matches!(
-            transaction_plan.actions.first(),
-            Some(ActionPlan::ShieldedIcs20Withdrawal(_))
-        ));
-    }
-
-    #[tokio::test]
     async fn host_withdrawal_ready_produces_wallet_facing_action_only() {
         let mut rng = OsRng;
         let source = AddressIndex::new(0);
@@ -2146,33 +1961,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zero_fee_ibc_action_plans_without_funding_transfer() {
-        let source = AddressIndex::new(0);
-        let sender = test_address(32);
-        let view_addresses = BTreeMap::from([(source, sender.clone())]);
-        let mut view = MockNoteManagerView::new(vec![], view_addresses);
-
-        let mut note_manager = NoteManager::new(OsRng);
-        note_manager.set_gas_prices(GasPrices::zero());
-
-        let result = note_manager
-            .plan_actions_with_transfer_funding(
-                &mut view,
-                source,
-                vec![ActionPlan::IbcAction(test_ibc_action())],
-            )
-            .await
-            .expect("IBC relay planning succeeds");
-
-        let NoteManagerPlanningResult::Ready { transaction_plan } = result else {
-            panic!("expected ready IBC relay plan");
-        };
-        assert_action_only_plan(transaction_plan, |action| {
-            matches!(action, ActionPlan::IbcAction(_))
-        });
-    }
-
-    #[tokio::test]
     async fn zero_fee_compliance_register_user_plans_without_funding_transfer() {
         let source = AddressIndex::new(1);
         let address = test_address(34);
@@ -2218,7 +2006,7 @@ mod tests {
             execution_price: 1_000,
             asset_id: *BASE_ASSET_ID,
         };
-        let action = ActionPlan::IbcAction(test_ibc_action());
+        let action = test_compliance_action();
         let exact_fee = gas_prices
             .fee(&(action.gas_cost() + shieldd_sdk_transaction::gas::transfer_gas_cost()))
             .apply_tier(FeeTier::default());
@@ -2253,7 +2041,7 @@ mod tests {
             "wallet and consensus fee inputs must cover the same complete plan",
         );
         assert_action_only_plan(transaction_plan.clone(), |planned_action| {
-            matches!(planned_action, ActionPlan::IbcAction(_))
+            matches!(planned_action, ActionPlan::ComplianceRegisterUser(_))
         });
         let fee_funding = transaction_plan
             .fee_funding
@@ -2273,7 +2061,7 @@ mod tests {
             execution_price: 1_000,
             asset_id: *BASE_ASSET_ID,
         };
-        let action = ActionPlan::IbcAction(test_ibc_action());
+        let action = test_compliance_action();
         let baseline_fee = gas_prices
             .fee(&(action.gas_cost() + shieldd_sdk_transaction::gas::transfer_gas_cost()))
             .apply_tier(FeeTier::default());

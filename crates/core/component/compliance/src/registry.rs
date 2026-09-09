@@ -906,31 +906,6 @@ pub trait ComplianceRegistryRead: StateRead {
             .is_some_and(|stored| stored == *leaf))
     }
 
-    // ========== IBC Compliance Metadata ==========
-
-    /// Retrieve IBC compliance metadata for an ICS-20 transfer.
-    ///
-    /// Returns the compliance metadata that was bridged via ICS-20 from the sending chain.
-    async fn get_ibc_compliance_metadata(
-        &self,
-        channel_id: &str,
-        packet_seq: u64,
-    ) -> Result<Option<crate::ibc::IbcComplianceMetadata>> {
-        use shieldd_sdk_proto::core::component::compliance::v1 as pb;
-        let key = state_key::ibc_compliance_metadata(channel_id, packet_seq);
-        match self.get_raw(&key).await? {
-            Some(bytes) => {
-                let proto: pb::IbcComplianceMetadata =
-                    shieldd_sdk_proto::Message::decode(bytes.as_slice()).map_err(|e| {
-                        anyhow::anyhow!("failed to decode IBC compliance metadata: {e}")
-                    })?;
-                let meta = crate::ibc::IbcComplianceMetadata::from_proto_public(proto)?;
-                Ok(Some(meta))
-            }
-            None => Ok(None),
-        }
-    }
-
     // ========== Historical Anchor Validation ==========
 
     /// Check if a user tree anchor is valid (exists in historical records).
@@ -1636,25 +1611,6 @@ trait ComplianceRegistryRawWrite: StateWrite + ComplianceRegistryRead {
         Ok(())
     }
 
-    // ========== IBC Compliance Metadata Storage ==========
-
-    /// Store IBC compliance metadata for an ICS-20 transfer.
-    ///
-    /// Called during ICS-20 packet receive when the memo contains compliance data.
-    fn store_ibc_compliance_metadata(
-        &mut self,
-        channel_id: &str,
-        packet_seq: u64,
-        metadata: &crate::ibc::IbcComplianceMetadata,
-    ) {
-        use shieldd_sdk_proto::Message as _;
-        let key = state_key::ibc_compliance_metadata(channel_id, packet_seq);
-        let proto = metadata.to_proto_public();
-        let bytes = proto.encode_to_vec();
-        self.put_raw(key, bytes);
-        tracing::debug!(channel_id, packet_seq, "stored IBC compliance metadata");
-    }
-
     // ========== Pending Registrations for CompactBlock ==========
 
     /// Buffer a user registration event for inclusion in the CompactBlock.
@@ -1911,18 +1867,6 @@ pub trait ComplianceRegistryWrite: StateWrite + ComplianceRegistryRead {
             admission.is_regulated,
         )
         .await
-    }
-
-    /// Store validated ICS-20 compliance metadata.
-    fn store_ibc_compliance_metadata(
-        &mut self,
-        channel_id: &str,
-        packet_seq: u64,
-        metadata: &crate::ibc::IbcComplianceMetadata,
-    ) {
-        <Self as ComplianceRegistryRawWrite>::store_ibc_compliance_metadata(
-            self, channel_id, packet_seq, metadata,
-        );
     }
 
     /// Drain user-registration events during compact-block construction.

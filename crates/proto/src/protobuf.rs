@@ -1,5 +1,3 @@
-use crate::shieldd::core::component::ibc::v1::IbcRelay;
-use crate::Name;
 use std::convert::{From, TryFrom};
 
 /// A marker type that captures the relationships between a domain type (`Self`) and a protobuf type (`Self::Proto`).
@@ -96,59 +94,5 @@ impl TryFrom<SpendVerificationKey> for VerificationKey<SpendAuth> {
     type Error = anyhow::Error;
     fn try_from(value: SpendVerificationKey) -> Result<Self, Self::Error> {
         Ok(value.inner.as_slice().try_into()?)
-    }
-}
-
-// IBC-rs impls
-extern crate ibc_types;
-
-use ibc_proto::ibc::core::channel::v1::Channel as RawChannel;
-use ibc_proto::ibc::core::client::v1::Height as RawHeight;
-use ibc_proto::ibc::core::connection::v1::ClientPaths as RawClientPaths;
-use ibc_proto::ibc::core::connection::v1::ConnectionEnd as RawConnectionEnd;
-
-use ibc_types::core::channel::ChannelEnd;
-use ibc_types::core::client::Height;
-use ibc_types::core::connection::{ClientPaths, ConnectionEnd};
-use ibc_types::lightclients::tendermint::client_state::ClientState;
-use ibc_types::lightclients::tendermint::consensus_state::ConsensusState;
-
-impl DomainType for ClientPaths {
-    type Proto = RawClientPaths;
-}
-
-impl DomainType for ConnectionEnd {
-    type Proto = RawConnectionEnd;
-}
-
-impl DomainType for ChannelEnd {
-    type Proto = RawChannel;
-}
-impl DomainType for Height {
-    type Proto = RawHeight;
-}
-
-impl DomainType for ClientState {
-    type Proto = ibc_proto::google::protobuf::Any;
-}
-impl DomainType for ConsensusState {
-    type Proto = ibc_proto::google::protobuf::Any;
-}
-
-impl<T> From<T> for IbcRelay
-where
-    T: ibc_types::DomainType + Send + Sync + 'static,
-    <T as TryFrom<<T as ibc_types::DomainType>::Proto>>::Error: Send + Sync + std::error::Error,
-{
-    fn from(v: T) -> Self {
-        let value_bytes = v.encode_to_vec();
-        let any = pbjson_types::Any {
-            type_url: <T as ibc_types::DomainType>::Proto::type_url(),
-            value: value_bytes.into(),
-        };
-
-        Self {
-            raw_action: Some(any),
-        }
     }
 }

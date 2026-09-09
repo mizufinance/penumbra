@@ -529,9 +529,6 @@ impl serde::Serialize for CommitmentSource {
                 commitment_source::Source::Transaction(v) => {
                     struct_ser.serialize_field("transaction", v)?;
                 }
-                commitment_source::Source::Ics20Transfer(v) => {
-                    struct_ser.serialize_field("ics20Transfer", v)?;
-                }
                 commitment_source::Source::Genesis(v) => {
                     struct_ser.serialize_field("genesis", v)?;
                 }
@@ -548,15 +545,12 @@ impl<'de> serde::Deserialize<'de> for CommitmentSource {
     {
         const FIELDS: &[&str] = &[
             "transaction",
-            "ics_20_transfer",
-            "ics20Transfer",
             "genesis",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Transaction,
-            Ics20Transfer,
             Genesis,
             __SkipField__,
         }
@@ -581,7 +575,6 @@ impl<'de> serde::Deserialize<'de> for CommitmentSource {
                     {
                         match value {
                             "transaction" => Ok(GeneratedField::Transaction),
-                            "ics20Transfer" | "ics_20_transfer" => Ok(GeneratedField::Ics20Transfer),
                             "genesis" => Ok(GeneratedField::Genesis),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
@@ -610,13 +603,6 @@ impl<'de> serde::Deserialize<'de> for CommitmentSource {
                                 return Err(serde::de::Error::duplicate_field("transaction"));
                             }
                             source__ = map_.next_value::<::std::option::Option<_>>()?.map(commitment_source::Source::Transaction)
-;
-                        }
-                        GeneratedField::Ics20Transfer => {
-                            if source__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ics20Transfer"));
-                            }
-                            source__ = map_.next_value::<::std::option::Option<_>>()?.map(commitment_source::Source::Ics20Transfer)
 ;
                         }
                         GeneratedField::Genesis => {
@@ -709,141 +695,6 @@ impl<'de> serde::Deserialize<'de> for commitment_source::Genesis {
             }
         }
         deserializer.deserialize_struct("shieldd.core.component.sct.v1.CommitmentSource.Genesis", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for commitment_source::Ics20Transfer {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.packet_seq != 0 {
-            len += 1;
-        }
-        if !self.channel_id.is_empty() {
-            len += 1;
-        }
-        if !self.sender.is_empty() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("shieldd.core.component.sct.v1.CommitmentSource.Ics20Transfer", len)?;
-        if self.packet_seq != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("packetSeq", ToString::to_string(&self.packet_seq).as_str())?;
-        }
-        if !self.channel_id.is_empty() {
-            struct_ser.serialize_field("channelId", &self.channel_id)?;
-        }
-        if !self.sender.is_empty() {
-            struct_ser.serialize_field("sender", &self.sender)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for commitment_source::Ics20Transfer {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "packet_seq",
-            "packetSeq",
-            "channel_id",
-            "channelId",
-            "sender",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            PacketSeq,
-            ChannelId,
-            Sender,
-            __SkipField__,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "packetSeq" | "packet_seq" => Ok(GeneratedField::PacketSeq),
-                            "channelId" | "channel_id" => Ok(GeneratedField::ChannelId),
-                            "sender" => Ok(GeneratedField::Sender),
-                            _ => Ok(GeneratedField::__SkipField__),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = commitment_source::Ics20Transfer;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct shieldd.core.component.sct.v1.CommitmentSource.Ics20Transfer")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<commitment_source::Ics20Transfer, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut packet_seq__ = None;
-                let mut channel_id__ = None;
-                let mut sender__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::PacketSeq => {
-                            if packet_seq__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("packetSeq"));
-                            }
-                            packet_seq__ =
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::ChannelId => {
-                            if channel_id__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("channelId"));
-                            }
-                            channel_id__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::Sender => {
-                            if sender__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("sender"));
-                            }
-                            sender__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::__SkipField__ => {
-                            let _ = map_.next_value::<serde::de::IgnoredAny>()?;
-                        }
-                    }
-                }
-                Ok(commitment_source::Ics20Transfer {
-                    packet_seq: packet_seq__.unwrap_or_default(),
-                    channel_id: channel_id__.unwrap_or_default(),
-                    sender: sender__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("shieldd.core.component.sct.v1.CommitmentSource.Ics20Transfer", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for commitment_source::Transaction {

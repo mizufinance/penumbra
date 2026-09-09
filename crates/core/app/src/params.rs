@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_compliance::params::ComplianceParameters;
 use shieldd_sdk_fee::FeeParameters;
-use shieldd_sdk_ibc::params::IBCParameters;
 use shieldd_sdk_proto::core::app::v1 as pb;
 use shieldd_sdk_proto::view::v1 as pb_view;
 use shieldd_sdk_proto::DomainType;
@@ -14,7 +13,6 @@ pub struct AppParameters {
     pub chain_id: String,
     pub compliance_params: ComplianceParameters,
     pub fee_params: FeeParameters,
-    pub ibc_params: IBCParameters,
     pub sct_params: SctParameters,
     pub shielded_pool_params: ShieldedPoolParameters,
 }
@@ -37,10 +35,6 @@ impl TryFrom<pb::AppParameters> for AppParameters {
                 .fee_params
                 .ok_or_else(|| anyhow::anyhow!("proto response missing fee params"))?
                 .try_into()?,
-            ibc_params: msg
-                .ibc_params
-                .ok_or_else(|| anyhow::anyhow!("proto response missing ibc params"))?
-                .try_into()?,
             sct_params: msg
                 .sct_params
                 .ok_or_else(|| anyhow::anyhow!("proto response missing sct params"))?
@@ -59,7 +53,6 @@ impl From<AppParameters> for pb::AppParameters {
             chain_id: params.chain_id,
             compliance_params: Some(params.compliance_params.into()),
             fee_params: Some(params.fee_params.into()),
-            ibc_params: Some(params.ibc_params.into()),
             sct_params: Some(params.sct_params.into()),
             shielded_pool_params: Some(params.shielded_pool_params.into()),
         }

@@ -4,14 +4,14 @@
 //! owns every acceptance-relevant scalar comparison and tagged reduction.
 
 /// Wire version authenticated by the shipping aggregate statement.
-pub const APP_VERIFY_PROTOCOL_VERSION: u32 = 2;
+pub const APP_VERIFY_PROTOCOL_VERSION: u32 = 3;
 
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AppVerifyFamilyCode {
     pub proof_family_id: u32,
     pub note_reshape_family_id: u32,
-    pub shielded_ics20_withdrawal_family_id: u32,
+    pub shielded_withdrawal_family_id: u32,
 }
 
 #[doc(hidden)]
@@ -799,7 +799,7 @@ pub fn app_verify_plan_ids_core(expected: Vec<AppVerifyExpectedCall>) -> Vec<App
 fn app_verify_family_code_matches(left: AppVerifyFamilyCode, right: AppVerifyFamilyCode) -> bool {
     left.proof_family_id == right.proof_family_id
         && left.note_reshape_family_id == right.note_reshape_family_id
-        && left.shielded_ics20_withdrawal_family_id == right.shielded_ics20_withdrawal_family_id
+        && left.shielded_withdrawal_family_id == right.shielded_withdrawal_family_id
 }
 
 fn app_verify_call_id_matches(left: AppVerifyCallId, right: AppVerifyCallId) -> bool {
@@ -953,7 +953,7 @@ mod tests {
         AppVerifyFamilyCode {
             proof_family_id: tag,
             note_reshape_family_id: 0,
-            shielded_ics20_withdrawal_family_id: 0,
+            shielded_withdrawal_family_id: 0,
         }
     }
 
@@ -1126,7 +1126,7 @@ mod tests {
             |id: &mut AppVerifyCallId| id.family_index += 1,
             |id: &mut AppVerifyCallId| id.family.proof_family_id += 1,
             |id: &mut AppVerifyCallId| id.family.note_reshape_family_id += 1,
-            |id: &mut AppVerifyCallId| id.family.shielded_ics20_withdrawal_family_id += 1,
+            |id: &mut AppVerifyCallId| id.family.shielded_withdrawal_family_id += 1,
         ];
         for mutate in full_id_mutations {
             let mut bad_full_id = records.clone();
@@ -1176,12 +1176,12 @@ mod tests {
         let transfer = AppVerifyFamilyCode {
             proof_family_id: 1,
             note_reshape_family_id: 0,
-            shielded_ics20_withdrawal_family_id: 0,
+            shielded_withdrawal_family_id: 0,
         };
         let reshape = AppVerifyFamilyCode {
             proof_family_id: 2,
             note_reshape_family_id: 1,
-            shielded_ics20_withdrawal_family_id: 0,
+            shielded_withdrawal_family_id: 0,
         };
         let id = AppVerifyCallId {
             order_index: 3,

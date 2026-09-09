@@ -2,8 +2,9 @@
 
 Bankd links the `shieldd` static library through `crates/bin/shieldd/include/shieldd.h`.
 Execution methods and protobuf messages are shared contracts. Bankd serves public
-queries; Shieldd reads committed snapshots directly. ICS20, IBC relay, host
-withdrawal, fees, all proof families, and stored-state formats remain supported.
+queries and executes IBC; Shieldd reads committed snapshots directly. Host
+withdrawals use the shared `shielded_withdrawal` proof family and return value
+to Bankd for transfer or execution.
 
 Build explicit deliverables from the Shieldd source root:
 

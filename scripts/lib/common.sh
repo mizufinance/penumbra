@@ -31,8 +31,8 @@ export_demo_gnark_env() {
 
     export SHIELDD_GNARK_NOTE_RESHAPE_LIB="$COMPLIANCE_REPO_ROOT/tools/gnark/libshieldd_gnark_note_reshape.${ext}"
 
-    export SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_LIB="$COMPLIANCE_REPO_ROOT/tools/gnark/libshieldd_gnark_shielded_ics20_withdrawal.${ext}"
-    export SHIELDD_GNARK_SHIELDED_ICS20_WITHDRAWAL_ARTIFACT_DIR="$COMPLIANCE_REPO_ROOT/tools/gnark/artifacts/shielded_ics20_withdrawal"
+    export SHIELDD_GNARK_SHIELDED_WITHDRAWAL_LIB="$COMPLIANCE_REPO_ROOT/tools/gnark/libshieldd_gnark_shielded_withdrawal.${ext}"
+    export SHIELDD_GNARK_SHIELDED_WITHDRAWAL_ARTIFACT_DIR="$COMPLIANCE_REPO_ROOT/tools/gnark/artifacts/shielded_withdrawal"
 }
 
 export_compliance_rust_log() {
@@ -84,7 +84,7 @@ build_demo_gnark_libs() {
         cd "$COMPLIANCE_REPO_ROOT/tools/gnark"
         CGO_ENABLED=1 go build -buildmode=c-shared -o "libshieldd_gnark_note_reshape.$(gnark_lib_ext)" ./cmd/note_reshapelib
         CGO_ENABLED=1 go build -buildmode=c-shared -o "libshieldd_gnark_transfer.$(gnark_lib_ext)" ./cmd/transferlib
-        CGO_ENABLED=1 go build -buildmode=c-shared -o "libshieldd_gnark_shielded_ics20_withdrawal.$(gnark_lib_ext)" ./cmd/shieldedics20withdrawallib
+        CGO_ENABLED=1 go build -buildmode=c-shared -o "libshieldd_gnark_shielded_withdrawal.$(gnark_lib_ext)" ./cmd/shieldedwithdrawallib
     )
 }
 
@@ -97,7 +97,7 @@ ensure_demo_gnark_libs() {
     for spec in \
         "note_reshape:shieldd_gnark_note_reshape_init" \
         "transfer:shieldd_gnark_transfer_init" \
-        "shielded_ics20_withdrawal:shieldd_gnark_shielded_ics20_withdrawal_init"
+        "shielded_withdrawal:shieldd_gnark_shielded_withdrawal_init"
     do
         local family="${spec%%:*}"
         local symbol="${spec#*:}"
@@ -119,7 +119,7 @@ ensure_demo_gnark_libs() {
     for spec in \
         "note_reshape:shieldd_gnark_note_reshape_init" \
         "transfer:shieldd_gnark_transfer_init" \
-        "shielded_ics20_withdrawal:shieldd_gnark_shielded_ics20_withdrawal_init"
+        "shielded_withdrawal:shieldd_gnark_shielded_withdrawal_init"
     do
         local family="${spec%%:*}"
         local symbol="${spec#*:}"

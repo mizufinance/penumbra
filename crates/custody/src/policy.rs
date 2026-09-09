@@ -7,7 +7,6 @@ use shieldd_sdk_keys::Address;
 use shieldd_sdk_proto::{
     core::transaction::v1::TransactionPlan as ProtoTransactionPlan, Message as _,
 };
-use shieldd_sdk_transaction::plan::ActionPlan;
 
 use crate::{AuthorizeRequest, PreAuthorization};
 
@@ -32,9 +31,6 @@ pub enum AuthPolicy {
         #[serde(with = "address_as_string")]
         allowed_destination_addresses: Vec<Address>,
     },
-    /// Intended for relayers, only allows `IbcAction` transactions plus at most
-    /// one self-addressed transfer used to fund fees.
-    OnlyIbcRelay,
     /// Require specific pre-authorizations for submitted [`TransactionPlan`](shieldd_sdk_transaction::TransactionPlan)s.
     PreAuthorization(PreAuthorizationPolicy),
 }
@@ -190,47 +186,7 @@ impl Policy for AuthPolicy {
                 }
                 Ok(())
             }
-            AuthPolicy::OnlyIbcRelay => {
-                let mut ibc_action_count = 0usize;
-                let mut transfer_count = 0usize;
 
-                for action in &plan.actions {
-                    match action {
-                        ActionPlan::IbcAction { .. } => {
-                            ibc_action_count += 1;
-                        }
-                        ActionPlan::Transfer(transfer) => {
-                            transfer_count += 1;
-                            if transfer_count > 1 {
-                                anyhow::bail!(
-                                    "OnlyIbcRelay allows at most one transfer funding action"
-                                );
-                            }
-
-                            let sender = transfer
-                                .inputs()
-                                .first()
-                                .expect("transfer plans always contain at least one real input")
-                                .note
-                                .address();
-                            if transfer.dest_addresses().any(|dest| dest != sender) {
-                                anyhow::bail!(
-                                    "OnlyIbcRelay only allows self-addressed transfer outputs"
-                                );
-                            }
-                        }
-                        _ => {
-                            anyhow::bail!("action {:?} not allowed by OnlyRelay policy", action);
-                        }
-                    }
-                }
-
-                if ibc_action_count == 0 {
-                    anyhow::bail!("OnlyIbcRelay requires at least one IBC relay action");
-                }
-
-                Ok(())
-            }
             AuthPolicy::PreAuthorization(policy) => policy.check_transaction(request),
         }
     }
@@ -242,108 +198,5 @@ impl Policy for PreAuthorizationPolicy {
             &request.pre_authorizations,
             ProtoTransactionPlan::from(request.plan.clone()).encode_to_vec(),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use decaf377::Fr;
-    use rand_core::OsRng;
-    use shieldd_sdk_asset::{Value, BASE_ASSET_ID};
-    use shieldd_sdk_ibc::IbcRelay;
-    use shieldd_sdk_keys::{
-        keys::{Bip44Path, SeedPhrase, SpendKey},
-        Address,
-    };
-    use shieldd_sdk_shielded_pool::{
-        Note, RecoveryCommitment, Rseed, ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
-    };
-    use shieldd_sdk_transaction::TransactionPlan;
-
-    fn test_address(index: u32) -> Address {
-        let seed = SeedPhrase::from_randomness(&[index as u8; 32]);
-        let spend_key = SpendKey::from_seed_phrase_bip44(seed, &Bip44Path::new(0))
-            .expect("test spend key should satisfy key refinements");
-        spend_key
-            .full_viewing_key()
-            .incoming()
-            .payment_address(index.into())
-    }
-
-    fn test_ibc_action() -> IbcRelay {
-        IbcRelay::Unknown(pbjson_types::Any {
-            type_url: "/shieldd.test.ibc".to_owned(),
-            value: vec![1, 2, 3].into(),
-        })
-    }
-
-    fn test_transfer(dest_address: Address) -> TransferPlan {
-        let mut rng = OsRng;
-        let sender = test_address(10);
-        let note = Note::from_parts(
-            sender.clone(),
-            Value {
-                amount: 5u64.into(),
-                asset_id: *BASE_ASSET_ID,
-            },
-            Rseed::generate(&mut rng),
-            RecoveryCommitment::unavailable(),
-        )
-        .expect("valid test note");
-        let spend = ShieldedInputPlan::new(&mut rng, note, 0u64.into());
-        let output = ShieldedOutputPlan::new(
-            &mut rng,
-            Value {
-                amount: 4u64.into(),
-                asset_id: *BASE_ASSET_ID,
-            },
-            dest_address,
-        );
-
-        shieldd_sdk_shielded_pool::test_plan_helpers::transfer(
-            vec![spend.into()],
-            vec![output.into()],
-            Fr::from(1u64),
-        )
-        .expect("valid transfer plan")
-    }
-
-    #[test]
-    fn only_ibc_relay_accepts_self_funded_transfer() {
-        let sender = test_address(10);
-        let request = AuthorizeRequest {
-            plan: TransactionPlan {
-                actions: vec![
-                    ActionPlan::Transfer(test_transfer(sender)),
-                    ActionPlan::IbcAction(test_ibc_action()),
-                ],
-                ..Default::default()
-            },
-            pre_authorizations: vec![],
-        };
-
-        AuthPolicy::OnlyIbcRelay
-            .check_transaction(&request)
-            .expect("self-funded relay transaction should be allowed");
-    }
-
-    #[test]
-    fn only_ibc_relay_rejects_external_transfer_outputs() {
-        let request = AuthorizeRequest {
-            plan: TransactionPlan {
-                actions: vec![
-                    ActionPlan::Transfer(test_transfer(test_address(12))),
-                    ActionPlan::IbcAction(test_ibc_action()),
-                ],
-                ..Default::default()
-            },
-            pre_authorizations: vec![],
-        };
-
-        let err = AuthPolicy::OnlyIbcRelay
-            .check_transaction(&request)
-            .expect_err("external transfer outputs should be rejected");
-        assert!(err.to_string().contains("self-addressed"));
     }
 }

@@ -11,13 +11,12 @@ edition = {workspace = true}
 component = [
     "cnidarium",
     "cnidarium-component",
-    "dep:ibc-proto",
     "shieldd-sdk-proto/cnidarium",
     "shieldd-sdk-sct/component",
     "dep:tokio",
 ]
 default = ["component"]
-scanner = ["dep:rusqlite", "dep:tokio", "tokio/sync", "tokio/time", "dep:ibc-proto"]
+scanner = ["dep:rusqlite", "dep:tokio", "tokio/sync", "tokio/time"]
 sqlite-bundled = ["scanner", "rusqlite/bundled"]
 test-helpers = ["decaf377-ka"]
 poc-orbis = ["dep:aes-gcm", "dep:hkdf"]
@@ -53,7 +52,6 @@ sha2 = {workspace = true}
 blake2b_simd = {workspace = true}
 hex = {workspace = true}
 hkdf = {version = "0.12", optional = true}
-ibc-proto = {workspace = true, optional = true, default-features = false}
 futures = {workspace = true}
 rand_core = {workspace = true}
 rusqlite = {version = "0.32", optional = true}

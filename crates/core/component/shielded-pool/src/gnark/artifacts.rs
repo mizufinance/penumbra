@@ -269,7 +269,7 @@ mod statement_parity_tests {
     const FAMILIES: &[&str] = &[
         "note_reshape1x8",
         "note_reshape8x1",
-        "shielded_ics20_withdrawal",
+        "shielded_withdrawal",
         "transfer",
     ];
 

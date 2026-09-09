@@ -46,7 +46,6 @@ use shieldd_sdk_fee::component::{
     clear_block_fee_price_cache, FeeComponent, FeePay as _, StateReadExt as _, StateWriteExt as _,
 };
 use shieldd_sdk_fee::{Fee, Gas, GasPrices};
-use shieldd_sdk_ibc::{StateReadExt as _, StateWriteExt as _};
 use shieldd_sdk_proof_aggregation::{
     aggregate_family, app_verify_accepted_join_projection_core, app_verify_family_code,
     app_verify_family_count_core, app_verify_join_acceptance_core, app_verify_plan_identity_core,
@@ -74,8 +73,8 @@ use shieldd_sdk_sct::epoch::Epoch;
 use shieldd_sdk_sct::{CommitmentSource, Nullifier};
 use shieldd_sdk_shielded_pool::component::{
     note_reshape_check_stateless_and_extract, shielded_host_withdrawal_check_stateless_and_extract,
-    shielded_ics20_withdrawal_check_stateless_and_extract, transfer_check_stateless_and_extract,
-    NoteManager as _, ShieldedPool, StateReadExt as _, StateWriteExt as _,
+    transfer_check_stateless_and_extract, NoteManager as _, ShieldedPool, StateReadExt as _,
+    StateWriteExt as _,
 };
 use shieldd_sdk_shielded_pool::VolumeNullifier;
 use shieldd_sdk_transaction::gas::GasCost as _;
@@ -96,11 +95,11 @@ use crate::action_handler::AppActionHandler;
 use crate::block_tx_indexing::BlockTxIndexingMode;
 use crate::genesis::AppState;
 
+use crate::metrics;
 use crate::params::AppParameters;
 use crate::stateless_cache::{
     CacheEntry, HistoricalValidationStamp, StatelessCache, TxArtifact, VerifiedTxArtifact,
 };
-use crate::{metrics, ShielddHost};
 use sha2::Digest as _;
 
 pub mod state_key;
@@ -202,12 +201,10 @@ fn action_family_id(action: &Action) -> Option<ProofFamilyId> {
         Action::NoteReshape(note_reshape) => {
             Some(ProofFamilyId::NoteReshape(note_reshape.body.family_id))
         }
-        Action::ShieldedIcs20Withdrawal(withdrawal) => Some(
-            ProofFamilyId::ShieldedIcs20Withdrawal(withdrawal.body.family_id),
-        ),
-        Action::ShieldedHostWithdrawal(withdrawal) => Some(ProofFamilyId::ShieldedIcs20Withdrawal(
-            withdrawal.body.family_id,
-        )),
+
+        Action::ShieldedHostWithdrawal(withdrawal) => {
+            Some(ProofFamilyId::ShieldedWithdrawal(withdrawal.body.family_id))
+        }
         _ => None,
     }
 }
@@ -218,7 +215,7 @@ fn proof_verification_key_for_family(
     match family_id {
         ProofFamilyId::Transfer => shieldd_sdk_proof_params::transfer_proof_verification_key(),
         ProofFamilyId::NoteReshape(family_id) => family_id.proof_verification_key(),
-        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => family_id.proof_verification_key(),
+        ProofFamilyId::ShieldedWithdrawal(family_id) => family_id.proof_verification_key(),
     }
 }
 
@@ -226,7 +223,7 @@ fn deployed_key_for_family(family_id: ProofFamilyId) -> DeployedProofKey {
     match family_id {
         ProofFamilyId::Transfer => DeployedProofKey::Transfer,
         ProofFamilyId::NoteReshape(family_id) => family_id.deployed_proof_key(),
-        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => family_id.deployed_proof_key(),
+        ProofFamilyId::ShieldedWithdrawal(family_id) => family_id.deployed_proof_key(),
     }
 }
 
@@ -234,7 +231,7 @@ fn proof_family_label(family_id: ProofFamilyId) -> &'static str {
     match family_id {
         ProofFamilyId::Transfer => shieldd_sdk_shielded_pool::TRANSFER_PROOF_LABEL,
         ProofFamilyId::NoteReshape(family_id) => family_id.label(),
-        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => family_id.label(),
+        ProofFamilyId::ShieldedWithdrawal(family_id) => family_id.label(),
     }
 }
 
@@ -242,7 +239,7 @@ fn proof_family_batch_verify_stage(family_id: ProofFamilyId) -> &'static str {
     match family_id {
         ProofFamilyId::Transfer => "transfer_batch_verify",
         ProofFamilyId::NoteReshape(_) => "note_reshape_batch_verify",
-        ProofFamilyId::ShieldedIcs20Withdrawal(_) => "shielded_ics20_withdrawal_batch_verify",
+        ProofFamilyId::ShieldedWithdrawal(_) => "shielded_withdrawal_batch_verify",
     }
 }
 
@@ -703,9 +700,9 @@ impl App {
                 .map(|spec| ProofFamilyId::NoteReshape(spec.id)),
         );
         family_ids.extend(
-            shieldd_sdk_shielded_pool::SHIELDED_ICS20_WITHDRAWAL_FAMILY_SPECS
+            shieldd_sdk_shielded_pool::SHIELDED_WITHDRAWAL_FAMILY_SPECS
                 .into_iter()
-                .map(|spec| ProofFamilyId::ShieldedIcs20Withdrawal(spec.id)),
+                .map(|spec| ProofFamilyId::ShieldedWithdrawal(spec.id)),
         );
         family_ids
     }
@@ -915,7 +912,6 @@ impl App {
         Vec<Arc<TxArtifact>>,
     )> {
         use cnidarium_component::ActionHandler as _;
-        use shieldd_sdk_shielded_pool::component::Ics20Transfer;
 
         let mut proof_items = Self::empty_proof_items();
         let mut artifacts = Vec::with_capacity(txs.len());
@@ -948,25 +944,7 @@ impl App {
                         tx_family_items.push(item.clone());
                         family_items.push(item);
                     }
-                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                        let item = shielded_ics20_withdrawal_check_stateless_and_extract(
-                            withdrawal, &context,
-                        )
-                        .context("shielded ICS-20 withdrawal stateless extraction failed")?;
 
-                        let family_id =
-                            action_family_id(&Action::ShieldedIcs20Withdrawal(withdrawal.clone()))
-                                .expect("shielded ICS-20 withdrawal has a proof family");
-
-                        tx_proof_items
-                            .get_mut(&family_id)
-                            .expect("shielded ICS-20 withdrawal family exists")
-                            .push(item.clone());
-                        proof_items
-                            .get_mut(&family_id)
-                            .expect("shielded ICS-20 withdrawal family exists")
-                            .push(item);
-                    }
                     Action::ShieldedHostWithdrawal(withdrawal) => {
                         let item = shielded_host_withdrawal_check_stateless_and_extract(
                             withdrawal, &context,
@@ -1003,13 +981,7 @@ impl App {
                             .expect("note reshape family exists")
                             .push(item);
                     }
-                    Action::IbcRelay(action) => {
-                        action
-                            .clone()
-                            .with_handler::<Ics20Transfer, ShielddHost>()
-                            .check_stateless(())
-                            .await?
-                    }
+
                     Action::ComplianceRegisterAsset(action) => action.check_stateless(()).await?,
                     Action::ComplianceRegisterUser(action) => action.check_stateless(()).await?,
                     Action::AggregateBundle(_) => {
@@ -1045,14 +1017,7 @@ impl App {
                         spend_nullifiers
                             .extend(transfer.body.inputs.iter().map(|input| input.nullifier));
                     }
-                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                        anchor_pairs.insert((
-                            withdrawal.body.compliance_anchor,
-                            withdrawal.body.asset_anchor,
-                        ));
-                        spend_nullifiers
-                            .extend(withdrawal.body.inputs.iter().map(|input| input.nullifier));
-                    }
+
                     Action::ShieldedHostWithdrawal(withdrawal) => {
                         anchor_pairs.insert((
                             withdrawal.body.compliance_anchor,
@@ -1269,7 +1234,7 @@ impl App {
         match family_id {
             ProofFamilyId::Transfer
             | ProofFamilyId::NoteReshape(_)
-            | ProofFamilyId::ShieldedIcs20Withdrawal(_) => AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
+            | ProofFamilyId::ShieldedWithdrawal(_) => AGGREGATE_PROOF_ESTIMATE_BYTES_OTHER,
         }
     }
 
@@ -2322,9 +2287,7 @@ impl App {
                     Action::ShieldedHostWithdrawal(withdrawal) => {
                         Some(&withdrawal.body.volume_accumulator)
                     }
-                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                        Some(&withdrawal.body.volume_accumulator)
-                    }
+
                     _ => None,
                 };
                 if let Some(payload) = payload {
@@ -2374,12 +2337,7 @@ impl App {
                         unique_pairs
                             .insert((transfer.body.compliance_anchor, transfer.body.asset_anchor));
                     }
-                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                        unique_pairs.insert((
-                            withdrawal.body.compliance_anchor,
-                            withdrawal.body.asset_anchor,
-                        ));
-                    }
+
                     Action::ShieldedHostWithdrawal(withdrawal) => {
                         unique_pairs.insert((
                             withdrawal.body.compliance_anchor,
@@ -2494,9 +2452,7 @@ impl App {
                     Action::ShieldedHostWithdrawal(withdrawal) => {
                         Some(&withdrawal.body.volume_accumulator)
                     }
-                    Action::ShieldedIcs20Withdrawal(withdrawal) => {
-                        Some(&withdrawal.body.volume_accumulator)
-                    }
+
                     _ => None,
                 };
                 if let Some(payload) = payload {
@@ -3721,17 +3677,12 @@ pub trait StateReadExt: StateRead {
     }
 
     /// Gets the chain revision number from the chain ID.
-    async fn get_revision_number(&self) -> Result<u64> {
-        let chain_id = self.get_chain_id().await?;
-        Ok(ibc_types::core::connection::ChainId::from_string(&chain_id).version())
-    }
 
     /// Returns the set of app parameters
     async fn get_app_params(&self) -> Result<AppParameters> {
         let chain_id = self.get_chain_id().await?;
         let compliance_params = self.get_compliance_params().await?;
         let fee_params = self.get_fee_params().await?;
-        let ibc_params = self.get_ibc_params().await?;
         let sct_params = self.get_sct_params().await?;
         let shielded_pool_params = self.get_shielded_pool_params().await?;
 
@@ -3739,7 +3690,6 @@ pub trait StateReadExt: StateRead {
             chain_id,
             compliance_params,
             fee_params,
-            ibc_params,
             sct_params,
             shielded_pool_params,
         })

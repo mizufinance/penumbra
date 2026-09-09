@@ -4,9 +4,9 @@ use decaf377::Fq;
 use prost::Message;
 use shieldd::ExecutionService;
 use shieldd_sdk_app::{
-    app::StateReadExt as _,
+    app::{StateReadExt as _, StateWriteExt as _},
     genesis::{AppState, Content},
-    StateWriteExt as _, SUBSTORE_PREFIXES,
+    SUBSTORE_PREFIXES,
 };
 use shieldd_sdk_keys::test_keys;
 use shieldd_sdk_proto::{

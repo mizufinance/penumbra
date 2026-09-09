@@ -1,53 +1,23 @@
 use super::*;
 
-use std::str::FromStr as _;
 use std::time::Duration;
 
 use ark_groth16::Proof;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use cnidarium::ArcStateDeltaExt as _;
-use ibc_types::{
-    core::{
-        channel::{
-            channel::{Order, State as ChannelState},
-            ChannelEnd, ChannelId, Counterparty as ChannelCounterparty, Packet, PortId, Version,
-        },
-        client::{ClientId, Height as IbcHeight},
-        commitment::MerkleRoot,
-        connection::{
-            ChainId, ConnectionEnd, ConnectionId, Counterparty as ConnectionCounterparty,
-            State as ConnectionState,
-        },
-    },
-    lightclients::tendermint::{
-        client_state::{AllowUpdate, ClientState},
-        consensus_state::ConsensusState,
-        TrustThreshold,
-    },
-    timestamp::Timestamp,
-};
 use shieldd_sdk_compact_block::component::StateReadExt as _;
-use shieldd_sdk_ibc::{
-    component::{
-        ChannelStateReadExt as _, ChannelStateWriteExt as _, ClientStateWriteExt as _,
-        ConnectionStateWriteExt as _, ConsensusStateWriteExt as _,
-    },
-    IBC_PROOF_SPECS,
-};
-use shieldd_sdk_proto::{StateReadProto as _, StateWriteProto as _};
 use shieldd_sdk_sct::component::tree::SctRead as _;
-use shieldd_sdk_shielded_pool::{Ics20Withdrawal, Note, NoteReshapeFamilyId};
+use shieldd_sdk_shielded_pool::{HostWithdrawal, Note, NoteReshapeFamilyId};
 use tokio::sync::OnceCell;
 
 use crate::app::{HostBlock, HostExecution, MAX_BLOCK_TXS_PAYLOAD_BYTES};
 use crate::stateless_cache::ProofSlot;
-use crate::ShielddHost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeployedProofFamily {
     Transfer,
     NoteReshape(NoteReshapeFamilyId),
-    ShieldedIcs20Withdrawal,
+    ShieldedWithdrawal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,7 +31,7 @@ impl DeployedProofFamily {
         match self {
             Self::Transfer => "transfer",
             Self::NoteReshape(family) => family.label(),
-            Self::ShieldedIcs20Withdrawal => "shielded_ics20_withdrawal",
+            Self::ShieldedWithdrawal => "shielded_withdrawal",
         }
     }
 
@@ -69,7 +39,7 @@ impl DeployedProofFamily {
         match self {
             Self::Transfer => Fr::from(1u64),
             Self::NoteReshape(family) => Fr::from(family.get()),
-            Self::ShieldedIcs20Withdrawal => Fr::from(29u64),
+            Self::ShieldedWithdrawal => Fr::from(29u64),
         }
     }
 }
@@ -113,7 +83,6 @@ struct FamilyFixtureSet {
     _storage_guard: TempStorage,
     fixtures: Vec<FamilyFixture>,
     fee_funding_fixture: FamilyFixture,
-    withdrawal_rollback_tx_bytes: Vec<u8>,
 }
 
 static FAMILY_FIXTURES: OnceCell<FamilyFixtureSet> = OnceCell::const_new();
@@ -219,18 +188,10 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
     note_cursor += 1;
     let withdrawal_action = withdrawal_plan(&client, withdrawal_note, Fr::from(29u64))?;
     family_actions.push((
-        DeployedProofFamily::ShieldedIcs20Withdrawal,
+        DeployedProofFamily::ShieldedWithdrawal,
         shieldd_sdk_mock_client::ActionIntent::from(withdrawal_action),
     ));
 
-    let mut withdrawal_rollback_actions = Vec::with_capacity(2);
-    for balance_blinding in [30u64, 31u64] {
-        let note = notes[note_cursor].clone();
-        note_cursor += 1;
-        withdrawal_rollback_actions.push(shieldd_sdk_mock_client::ActionIntent::from(
-            withdrawal_plan(&client, note, Fr::from(balance_blinding))?,
-        ));
-    }
     anyhow::ensure!(
         note_cursor == FIXTURE_REQUIRED_NOTES,
         "fixture note accounting drifted: used {note_cursor}, expected {FIXTURE_REQUIRED_NOTES}"
@@ -279,25 +240,6 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
         .context("building fee-funding Transfer transaction fixture")?;
     let fee_funding_fixture = FamilyFixture::fee_funding(fee_funding_tx.encode_to_vec());
 
-    let withdrawal_rollback_plan = shieldd_sdk_mock_client::TransactionIntent {
-        actions: withdrawal_rollback_actions,
-        memo: None,
-        fee_funding: None,
-        transaction_parameters: TransactionParameters {
-            chain_id: TEST_CHAIN_ID.to_string(),
-            ..Default::default()
-        },
-        nullifier_window: Some(test_nullifier_window()),
-    };
-    let withdrawal_rollback_tx = client
-        .witness_auth_build(
-            &client
-                .complete_intent(withdrawal_rollback_plan, storage.latest_snapshot())
-                .await?,
-        )
-        .await
-        .context("building two-withdrawal rollback fixture")?;
-
     anyhow::ensure!(
         fixtures.len() == 4,
         "acceptance-boundary fixture set must cover all four deployed proof families"
@@ -307,12 +249,11 @@ async fn build_family_fixture_set() -> Result<FamilyFixtureSet> {
         _storage_guard: storage,
         fixtures,
         fee_funding_fixture,
-        withdrawal_rollback_tx_bytes: withdrawal_rollback_tx.encode_to_vec(),
     })
 }
 
 const FIXTURE_ALLOCATION_AMOUNT: u64 = 1_000_000;
-const FIXTURE_REQUIRED_NOTES: usize = 8;
+const FIXTURE_REQUIRED_NOTES: usize = 6;
 
 async fn build_fixture_storage() -> Result<TempStorage> {
     let storage = TempStorage::new_with_prefixes(SUBSTORE_PREFIXES.to_vec()).await?;
@@ -385,20 +326,18 @@ fn withdrawal_plan(
     client: &MockClient,
     note: Note,
     balance_blinding: Fr,
-) -> Result<shieldd_sdk_mock_client::WithdrawalIntent<Ics20Withdrawal>> {
+) -> Result<shieldd_sdk_mock_client::WithdrawalIntent> {
     let withdrawal_amount = Amount::from(1u64);
-    let withdrawal = Ics20Withdrawal {
-        amount: withdrawal_amount,
-        denom: BASE_ASSET_DENOM.clone(),
-        destination_chain_address: "cosmos1destination".to_owned(),
-        return_address: test_keys::ADDRESS_0.deref().clone(),
-        timeout_height: IbcHeight::new(1, 10).context("valid withdrawal timeout height")?,
-        // Absolute Unix timestamp, minute-rounded and after the fixture chain's
-        // 2026-01-01 initial time, so route-valid tests reach packet execution.
-        timeout_time: 1_800_000_000_000_000_000,
-        source_channel: ChannelId::from_str("channel-0")?,
-        ics20_memo: String::new(),
-        use_transparent_address: false,
+    let withdrawal = HostWithdrawal {
+        value: Value {
+            amount: withdrawal_amount,
+            asset_id: note.asset_id(),
+        },
+        destination: shieldd_sdk_shielded_pool::HostWithdrawalDestination::Transfer(
+            shieldd_sdk_shielded_pool::HostTransfer {
+                recipient: "bank1destination".to_owned(),
+            },
+        ),
     };
     let spend = spend_plan(client, note.clone())?;
     let change = ShieldedOutputPlan::new(
@@ -434,8 +373,8 @@ fn mutate_to_decodable_invalid_proof(fixture: &FamilyFixture) -> Result<(Transac
                     &mut action.proof.inner
                 }
                 (
-                    [Action::ShieldedIcs20Withdrawal(action)],
-                    DeployedProofFamily::ShieldedIcs20Withdrawal,
+                    [Action::ShieldedHostWithdrawal(action)],
+                    DeployedProofFamily::ShieldedWithdrawal,
                 ) => &mut action.proof.inner,
                 _ => anyhow::bail!(
                     "{} fixture did not contain its expected single proof action",
@@ -558,75 +497,6 @@ async fn stage_spent_nullifier(app: &mut App, tx: &Transaction) -> Result<[u8; 3
         .await?;
     state_tx.apply();
     Ok(source_id)
-}
-
-async fn put_open_withdrawal_route(app: &mut App, withdrawal: &Ics20Withdrawal) -> Result<()> {
-    let mut state_tx = app
-        .state
-        .try_begin_transaction()
-        .context("test app state is uniquely owned")?;
-    let client_id = ClientId::from_str("07-tendermint-0")?;
-    let latest_height = IbcHeight::new(1, 1)?;
-    let client_state = ClientState::new(
-        ChainId::new("counterparty".to_string(), 1),
-        TrustThreshold::ONE_THIRD,
-        Duration::from_secs(4_000_000_000),
-        Duration::from_secs(5_000_000_000),
-        Duration::from_secs(5),
-        latest_height,
-        IBC_PROOF_SPECS.to_vec(),
-        vec![],
-        AllowUpdate {
-            after_expiry: false,
-            after_misbehaviour: false,
-        },
-        None,
-    )?;
-    state_tx.put_client(&client_id, client_state);
-    state_tx
-        .put_verified_consensus_state::<ShielddHost>(
-            latest_height,
-            client_id.clone(),
-            ConsensusState::new(
-                MerkleRoot {
-                    hash: vec![1u8; 32],
-                },
-                Time::from_unix_timestamp(1, 0)?,
-                tendermint::Hash::Sha256([2u8; 32]),
-            ),
-        )
-        .await?;
-
-    let connection_id = ConnectionId::new(0);
-    state_tx
-        .put_new_connection(
-            &connection_id,
-            ConnectionEnd {
-                state: ConnectionState::Open,
-                client_id,
-                counterparty: ConnectionCounterparty::default(),
-                versions: vec![],
-                delay_period: Duration::ZERO,
-            },
-        )
-        .await?;
-
-    let port = PortId::transfer();
-    state_tx.put_channel(
-        &withdrawal.source_channel,
-        &port,
-        ChannelEnd {
-            state: ChannelState::Open,
-            ordering: Order::Unordered,
-            remote: ChannelCounterparty::new(port.clone(), Some(ChannelId::new(7))),
-            connection_hops: vec![connection_id],
-            version: Version::new("ics20-1".to_string()),
-            ..ChannelEnd::default()
-        },
-    );
-    state_tx.put_send_sequence(&withdrawal.source_channel, &port, 1);
-    state_tx.apply();
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -867,7 +737,7 @@ async fn deferred_index_records_only_transactions_that_commit() -> Result<()> {
     let withdrawal = family_set
         .fixtures
         .iter()
-        .find(|fixture| fixture.family == DeployedProofFamily::ShieldedIcs20Withdrawal)
+        .find(|fixture| fixture.family == DeployedProofFamily::ShieldedWithdrawal)
         .context("withdrawal fixture is present")?;
 
     for mode in [
@@ -876,15 +746,21 @@ async fn deferred_index_records_only_transactions_that_commit() -> Result<()> {
     ] {
         let mut app = App::new(family_set._storage_guard.latest_snapshot());
         app.set_block_tx_indexing_mode(mode);
+        use shieldd_sdk_shielded_pool::component::StateWriteExt as _;
+        let mut state_tx = app
+            .state
+            .try_begin_transaction()
+            .context("unique test state")?;
+        state_tx.put_host_withdrawals_enabled(false);
+        state_tx.apply();
         let cache = StatelessCache::new();
 
         let error = app
             .deliver_tx_bytes(&withdrawal.tx_bytes, Some(&cache))
             .await
-            .expect_err("withdrawal without an IBC route must reject after proof verification");
+            .expect_err("disabled host withdrawal must reject after proof verification");
         assert!(
-            format!("{error:#}").contains("channel channel-0")
-                && format!("{error:#}").contains("does not exist"),
+            format!("{error:#}").contains("host withdrawals are not enabled"),
             "{mode:?}: withdrawal failed for the wrong reason: {error:#}"
         );
         assert!(
@@ -900,200 +776,6 @@ async fn deferred_index_records_only_transactions_that_commit() -> Result<()> {
             "{mode:?}: rejected transaction was persisted in the block transaction index"
         );
     }
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn proved_withdrawal_accounting_failure_rolls_back_action_effects() -> Result<()> {
-    let family_set = family_fixtures().await?;
-    let withdrawal_fixture = family_set
-        .fixtures
-        .iter()
-        .find(|fixture| fixture.family == DeployedProofFamily::ShieldedIcs20Withdrawal)
-        .context("withdrawal fixture is present")?;
-    let tx = Transaction::decode(withdrawal_fixture.tx_bytes.as_slice())
-        .context("decode proved withdrawal fixture")?;
-    let withdrawal = match &tx.transaction_body.actions[..] {
-        [Action::ShieldedIcs20Withdrawal(action)] => action.body.withdrawal.clone(),
-        _ => anyhow::bail!("withdrawal fixture has the wrong action shape"),
-    };
-
-    let mut app = App::new(family_set._storage_guard.latest_snapshot());
-    app.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
-    put_open_withdrawal_route(&mut app, &withdrawal).await?;
-
-    let balance_key = shieldd_sdk_ibc::component::state_key::ics20_value_balance::by_asset_id(
-        &withdrawal.source_channel,
-        &withdrawal.denom.id(),
-    );
-    let mut setup_tx = app
-        .state
-        .try_begin_transaction()
-        .context("test app state is uniquely owned")?;
-    setup_tx.put(balance_key.clone(), Amount::from(u128::MAX));
-    setup_tx.apply();
-
-    let cache = StatelessCache::new();
-    let error = app
-        .deliver_tx_bytes(&withdrawal_fixture.tx_bytes, Some(&cache))
-        .await
-        .expect_err("proved withdrawal must reject escrow overflow after proof-bound effects");
-    assert!(
-        format!("{error:#}").contains("overflow adding value balance"),
-        "proved withdrawal failed for the wrong reason: {error:#}"
-    );
-
-    assert_no_tx_effects(&app, &tx, "proved withdrawal accounting failure").await?;
-    assert_eq!(
-        app.state
-            .get::<Amount>(&balance_key)
-            .await?
-            .context("preexisting escrow balance remains present")?,
-        Amount::from(u128::MAX),
-        "failed withdrawal must retain the exact pre-transaction escrow balance"
-    );
-    let port = PortId::transfer();
-    assert_eq!(
-        app.state
-            .get_send_sequence(&withdrawal.source_channel, &port)
-            .await?,
-        1,
-        "failed withdrawal must not allocate a packet sequence"
-    );
-    assert!(
-        app.state
-            .get_packet_commitment_by_id(&withdrawal.source_channel, &port, 1)
-            .await?
-            .is_none(),
-        "failed withdrawal must not persist a packet commitment"
-    );
-    assert!(
-        app.deferred_block_transactions.is_empty(),
-        "failed withdrawal must not escape into the deferred transaction index"
-    );
-    app.flush_deferred_block_transactions().await?;
-    let height = app.state.get_block_height().await?;
-    assert!(
-        app.state
-            .transactions_by_height(height)
-            .await?
-            .transactions
-            .is_empty(),
-        "failed withdrawal must not persist in the transaction index"
-    );
-
-    let replacement = Arc::new(StateDelta::new(family_set._storage_guard.latest_snapshot()));
-    let state = std::mem::replace(&mut app.state, replacement);
-    let state = Arc::try_unwrap(state)
-        .map_err(|_| anyhow!("failed withdrawal test retained a state reference"))?;
-    let (_, mut changes) = state.flatten();
-    assert!(
-        changes.take_events().is_empty(),
-        "failed withdrawal must not leak staged ABCI events"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn proved_withdrawal_then_later_failure_rolls_back_first_action() -> Result<()> {
-    let family_set = family_fixtures().await?;
-    let tx = Transaction::decode(family_set.withdrawal_rollback_tx_bytes.as_slice())
-        .context("decode proved two-withdrawal rollback fixture")?;
-    let withdrawals = tx
-        .transaction_body
-        .actions
-        .iter()
-        .map(|action| match action {
-            Action::ShieldedIcs20Withdrawal(action) => Ok(action.body.withdrawal.clone()),
-            _ => anyhow::bail!("rollback fixture contains a non-withdrawal action"),
-        })
-        .collect::<Result<Vec<_>>>()?;
-    anyhow::ensure!(
-        withdrawals.len() == 2,
-        "rollback fixture must contain exactly two withdrawals"
-    );
-    let withdrawal = &withdrawals[0];
-
-    let mut app = App::new(family_set._storage_guard.latest_snapshot());
-    app.set_block_tx_indexing_mode(BlockTxIndexingMode::DeferredBatch);
-    put_open_withdrawal_route(&mut app, withdrawal).await?;
-
-    let port = PortId::transfer();
-    let occupied_packet = Packet {
-        sequence: 2u64.into(),
-        port_on_a: port.clone(),
-        chan_on_a: withdrawal.source_channel.clone(),
-        port_on_b: port.clone(),
-        chan_on_b: ChannelId::new(7),
-        data: b"preexisting packet slot".to_vec(),
-        timeout_height_on_b: IbcHeight::new(1, 10)?.into(),
-        timeout_timestamp_on_b: Timestamp::from_nanoseconds(60_000_000_000)?,
-    };
-    let mut setup_tx = app
-        .state
-        .try_begin_transaction()
-        .context("test app state is uniquely owned")?;
-    setup_tx.put_packet_commitment(&occupied_packet);
-    setup_tx.apply();
-
-    let balance_key = shieldd_sdk_ibc::component::state_key::ics20_value_balance::by_asset_id(
-        &withdrawal.source_channel,
-        &withdrawal.denom.id(),
-    );
-    let cache = StatelessCache::new();
-    let error = app
-        .deliver_tx_bytes(&family_set.withdrawal_rollback_tx_bytes, Some(&cache))
-        .await
-        .expect_err("the occupied second packet slot must reject after the first withdrawal");
-    assert!(
-        format!("{error:#}").contains("packet commitment already exists")
-            && format!("{error:#}").contains("sequence 2"),
-        "proved rollback fixture failed before the later withdrawal: {error:#}"
-    );
-
-    assert_no_tx_effects(&app, &tx, "later withdrawal failure").await?;
-    assert_eq!(
-        app.state
-            .get_send_sequence(&withdrawal.source_channel, &port)
-            .await?,
-        1,
-        "the first withdrawal's sequence advance must roll back"
-    );
-    assert!(
-        app.state
-            .get_packet_commitment_by_id(&withdrawal.source_channel, &port, 1)
-            .await?
-            .is_none(),
-        "the first withdrawal's packet commitment must roll back"
-    );
-    assert!(
-        app.state
-            .get_packet_commitment_by_id(&withdrawal.source_channel, &port, 2)
-            .await?
-            .is_some(),
-        "the preexisting packet commitment must remain"
-    );
-    assert_eq!(
-        app.state.get::<Amount>(&balance_key).await?,
-        None,
-        "the first withdrawal's escrow accounting must roll back"
-    );
-    assert!(
-        app.deferred_block_transactions.is_empty(),
-        "the rejected transaction must not enter the deferred index"
-    );
-
-    let replacement = Arc::new(StateDelta::new(family_set._storage_guard.latest_snapshot()));
-    let state = std::mem::replace(&mut app.state, replacement);
-    let state =
-        Arc::try_unwrap(state).map_err(|_| anyhow!("rollback test retained a state reference"))?;
-    let (_, mut changes) = state.flatten();
-    assert!(
-        changes.take_events().is_empty(),
-        "the first withdrawal's events must roll back"
-    );
 
     Ok(())
 }

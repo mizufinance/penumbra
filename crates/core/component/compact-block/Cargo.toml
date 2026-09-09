@@ -38,7 +38,6 @@ imbl = {workspace = true}
 metrics = {workspace = true}
 shieldd-sdk-compliance = {workspace = true, default-features = false}
 shieldd-sdk-fee = {workspace = true, default-features = false}
-shieldd-sdk-ibc = {workspace = true, default-features = false}
 shieldd-sdk-proof-params = {workspace = true, default-features = false}
 shieldd-sdk-proto = {workspace = true, default-features = false}
 shieldd-sdk-sct = {workspace = true, default-features = false}

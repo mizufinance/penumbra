@@ -5,7 +5,6 @@ package shieldd.view.v1;
 import "shieldd/core/app/v1/app.proto";
 import "shieldd/core/asset/v1/asset.proto";
 import "shieldd/core/component/fee/v1/fee.proto";
-import "shieldd/core/component/ibc/v1/ibc.proto";
 import "shieldd/core/component/sct/v1/sct.proto";
 import "shieldd/core/component/shielded_pool/v1/shielded_pool.proto";
 import "shieldd/core/keys/v1/keys.proto";
@@ -213,6 +212,7 @@ message BroadcastTransactionResponse {
 }
 
 message TransactionPlannerRequest {
+  reserved 60, 61;
   // The expiry height for the requested TransactionPlan
   uint64 expiry_height = 1;
 
@@ -224,8 +224,6 @@ message TransactionPlannerRequest {
 
   // Request contents
   repeated TransferOutput outputs = 20;
-  repeated shieldd.core.component.ibc.v1.IbcRelay ibc_relay_actions = 60;
-  repeated shieldd.core.component.ibc.v1.Ics20Withdrawal ics20_withdrawals = 61;
   repeated shieldd.core.component.shielded_pool.v1.HostWithdrawal host_withdrawals = 62;
 
   // Specifies either that the planner should compute fees automatically or that it should use a fixed fee amount.

@@ -33,32 +33,32 @@ func TestRustGoStatementFieldDifferential(t *testing.T) {
 		}
 	})
 
-	t.Run("shielded_ics20_withdrawal", func(t *testing.T) {
-		witness, _, err := DecodeShieldedIcs20WithdrawalWitness(
-			testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal"),
+	t.Run("shielded_withdrawal", func(t *testing.T) {
+		witness, _, err := DecodeShieldedWithdrawalWitness(
+			testfixtures.LoadShieldedWithdrawalWitness("shielded_withdrawal"),
 		)
 		if err != nil {
-			t.Fatalf("decode shielded ICS-20 withdrawal witness: %v", err)
+			t.Fatalf("decode shielded withdrawal witness: %v", err)
 		}
-		reconstructed, err := ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness(witness)
+		reconstructed, err := ReconstructedShieldedWithdrawalStatementFieldsFromWitness(witness)
 		if err != nil {
-			t.Fatalf("reconstruct shielded ICS-20 withdrawal statement fields: %v", err)
+			t.Fatalf("reconstruct shielded withdrawal statement fields: %v", err)
 		}
 		nativeFields := make([]*big.Int, len(reconstructed))
 		for i, field := range reconstructed {
 			nativeFields[i] = primitives.LittleEndianBytesToBigInt(field[:])
 		}
-		hash, err := primitives.ShieldedIcs20WithdrawalStatementHashNativeForShape(
+		hash, err := primitives.ShieldedWithdrawalStatementHashNativeForShape(
 			nativeFields,
 			int(witness.NIn),
 		)
 		if err != nil {
-			t.Fatalf("hash reconstructed shielded ICS-20 withdrawal statement fields: %v", err)
+			t.Fatalf("hash reconstructed shielded withdrawal statement fields: %v", err)
 		}
 		claimed := primitives.LittleEndianBytesToBigInt(witness.ClaimedStatementHash[:])
 		if hash.Cmp(claimed) != 0 {
 			t.Fatalf(
-				"shielded ICS-20 withdrawal reconstructed statement hash mismatch:\ngot=%s\nwant=%s",
+				"shielded withdrawal reconstructed statement hash mismatch:\ngot=%s\nwant=%s",
 				hash,
 				claimed,
 			)

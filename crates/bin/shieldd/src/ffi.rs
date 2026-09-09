@@ -888,7 +888,6 @@ mod tests {
         assert_eq!(parameters.chain_id, "bankd-local");
         assert!(parameters.compliance_params.is_some());
         assert!(parameters.fee_params.is_some());
-        assert!(parameters.ibc_params.is_some());
         assert!(parameters.sct_params.is_some());
         assert!(parameters.shielded_pool_params.is_some());
         close(handle);

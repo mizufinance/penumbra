@@ -26,17 +26,17 @@ var embeddedNoteReshape1x8Witness []byte
 //go:embed vectors/note_reshape8x1_witness.bin
 var embeddedNoteReshape8x1Witness []byte
 
-//go:embed vectors/shielded_ics20_withdrawal_witness.bin
-var embeddedShieldedIcs20WithdrawalWitness []byte
+//go:embed vectors/shielded_withdrawal_witness.bin
+var embeddedShieldedWithdrawalWitness []byte
 
-//go:embed vectors/shielded_ics20_withdrawal_unregulated_witness.bin
-var embeddedUnregulatedShieldedIcs20WithdrawalWitness []byte
+//go:embed vectors/shielded_withdrawal_unregulated_witness.bin
+var embeddedUnregulatedShieldedWithdrawalWitness []byte
 
-//go:embed vectors/shielded_ics20_withdrawal_accumulator_origin_witness.bin
-var embeddedAccumulatorOriginShieldedIcs20WithdrawalWitness []byte
+//go:embed vectors/shielded_withdrawal_accumulator_origin_witness.bin
+var embeddedAccumulatorOriginShieldedWithdrawalWitness []byte
 
-//go:embed vectors/shielded_ics20_withdrawal_accumulator_continuation_witness.bin
-var embeddedAccumulatorContinuationShieldedIcs20WithdrawalWitness []byte
+//go:embed vectors/shielded_withdrawal_accumulator_continuation_witness.bin
+var embeddedAccumulatorContinuationShieldedWithdrawalWitness []byte
 
 //go:embed vectors/note_seizure_witness.bin
 var embeddedNoteSeizureWitness []byte
@@ -75,17 +75,17 @@ func LoadNoteReshapeWitness(label string) []byte {
 	}
 }
 
-func LoadShieldedIcs20WithdrawalWitness(label string) []byte {
+func LoadShieldedWithdrawalWitness(label string) []byte {
 	switch label {
-	case "shielded_ics20_withdrawal":
-		return append([]byte(nil), embeddedShieldedIcs20WithdrawalWitness...)
-	case "shielded_ics20_withdrawal_unregulated":
-		return append([]byte(nil), embeddedUnregulatedShieldedIcs20WithdrawalWitness...)
-	case "shielded_ics20_withdrawal_accumulator_origin":
-		return append([]byte(nil), embeddedAccumulatorOriginShieldedIcs20WithdrawalWitness...)
-	case "shielded_ics20_withdrawal_accumulator_continuation":
-		return append([]byte(nil), embeddedAccumulatorContinuationShieldedIcs20WithdrawalWitness...)
+	case "shielded_withdrawal":
+		return append([]byte(nil), embeddedShieldedWithdrawalWitness...)
+	case "shielded_withdrawal_unregulated":
+		return append([]byte(nil), embeddedUnregulatedShieldedWithdrawalWitness...)
+	case "shielded_withdrawal_accumulator_origin":
+		return append([]byte(nil), embeddedAccumulatorOriginShieldedWithdrawalWitness...)
+	case "shielded_withdrawal_accumulator_continuation":
+		return append([]byte(nil), embeddedAccumulatorContinuationShieldedWithdrawalWitness...)
 	default:
-		panic("unknown shielded ICS-20 withdrawal witness label: " + label)
+		panic("unknown shielded withdrawal witness label: " + label)
 	}
 }

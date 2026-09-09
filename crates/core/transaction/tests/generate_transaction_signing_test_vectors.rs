@@ -1,19 +1,11 @@
 use decaf377::Fr;
-use ibc_proto::ics23::CommitmentProof;
-use ibc_types::core::{
-    channel::{msgs::MsgRecvPacket, packet::Sequence, ChannelId, Packet, PortId},
-    client::Height,
-    commitment::MerkleProof,
-};
-use ibc_types::timestamp::Timestamp;
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
 use rand::{rngs::StdRng, SeedableRng};
 use rand_core::{CryptoRng, Error as RandError, RngCore};
-use shieldd_sdk_asset::{asset::Id, Value, BASE_ASSET_DENOM};
+use shieldd_sdk_asset::{asset::Id, Value};
 use shieldd_sdk_fee::Fee;
-use shieldd_sdk_ibc::IbcRelay;
 use shieldd_sdk_keys::keys::{Bip44Path, SeedPhrase, SpendKey};
 use shieldd_sdk_keys::test_keys::SEED_PHRASE;
 use shieldd_sdk_keys::{Address, FullViewingKey};
@@ -23,8 +15,8 @@ use shieldd_sdk_sct::nullifier_generation::{
     empty_history_head, NullifierWindow, PROTOCOL_VERSION,
 };
 use shieldd_sdk_shielded_pool::{
-    Ics20Withdrawal, Note, NoteReshapeFamilyId, NoteReshapePlan, ShieldedIcs20WithdrawalPlan,
-    ShieldedInputPlan, ShieldedOutputPlan, TransferPlan,
+    Note, NoteReshapeFamilyId, NoteReshapePlan, ShieldedHostWithdrawalPlan, ShieldedInputPlan,
+    ShieldedOutputPlan, TransferPlan,
 };
 use shieldd_sdk_transaction::{ActionPlan, TransactionParameters, TransactionPlan};
 use std::io::Write;
@@ -102,91 +94,33 @@ fn spend_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = ShieldedIn
     })
 }
 
-fn sequence_strategy() -> impl Strategy<Value = Sequence> {
-    (4001..2000000000u64).prop_map(Sequence)
-}
-
-fn ibc_action_strategy() -> impl Strategy<Value = IbcRelay> {
-    (
-        sequence_strategy(),
-        0..1000000000u64,
-        1..1000000000u64,
-        1..1_000_000_000_000_000_000u64,
-        address_strategy(),
-    )
-        .prop_map(
-            |(sequence, revision_number, revision_height, timeout_timestamp_nanos, src)| {
-                IbcRelay::RecvPacket(MsgRecvPacket {
-                    packet: Packet {
-                        sequence,
-                        port_on_a: PortId::default(),
-                        chan_on_a: ChannelId::default(),
-                        port_on_b: PortId::default(),
-                        chan_on_b: ChannelId::default(),
-                        data: vec![0u8; 100],
-                        timeout_height_on_b: ibc_types::core::channel::TimeoutHeight::At(
-                            Height::new(revision_number, revision_height).expect("test value"),
-                        ),
-                        timeout_timestamp_on_b: Timestamp::from_nanoseconds(
-                            timeout_timestamp_nanos,
-                        )
-                        .expect("test timestamp"),
-                    },
-                    proof_commitment_on_a: MerkleProof {
-                        proofs: vec![CommitmentProof::default()],
-                    },
-                    proof_height_on_a: Height::new(revision_number, revision_height)
-                        .expect("test value"),
-                    signer: src.to_string(),
-                })
-            },
-        )
-}
-
-fn shielded_ics20_withdrawal_plan_strategy(
+fn shielded_host_withdrawal_plan_strategy(
     fvk: &FullViewingKey,
-) -> impl Strategy<Value = ShieldedIcs20WithdrawalPlan> {
-    let note_strategy = note_strategy(fvk.incoming().payment_address(0u32.into()));
-    let position_strategy = any::<shieldd_sdk_tct::Position>();
-
+) -> impl Strategy<Value = ShieldedHostWithdrawalPlan> {
     (
-        note_strategy,
-        position_strategy,
-        address_strategy(),
-        0..1000000000u64,
-        1..1000000u64,
-        1..1000000u64,
+        note_strategy(fvk.incoming().payment_address(0u32.into())),
+        any::<shieldd_sdk_tct::Position>(),
     )
-        .prop_map(
-            |(
-                note,
-                position,
-                return_address,
-                revision_number,
-                revision_height,
-                timeout_minutes,
-            )| {
-                let withdrawal = Ics20Withdrawal {
+        .prop_map(|(note, position)| {
+            let withdrawal = shieldd_sdk_shielded_pool::HostWithdrawal {
+                value: Value {
                     amount: note.amount(),
-                    denom: BASE_ASSET_DENOM.clone(),
-                    destination_chain_address: return_address.to_string(),
-                    return_address: return_address.clone(),
-                    timeout_height: Height::new(revision_number, revision_height)
-                        .expect("test value"),
-                    timeout_time: timeout_minutes * 60_000_000_000,
-                    source_channel: ChannelId::default(),
-                    use_transparent_address: false,
-                    ics20_memo: String::default(),
-                };
-                shieldd_sdk_shielded_pool::test_plan_helpers::ics20_withdrawal(
-                    vec![ShieldedInputPlan::new(&mut OsRng, note, position)],
-                    None,
-                    withdrawal,
-                    Fr::rand(&mut OsRng),
-                )
-                .expect("valid shielded ICS-20 withdrawal plan")
-            },
-        )
+                    asset_id: note.asset_id(),
+                },
+                destination: shieldd_sdk_shielded_pool::HostWithdrawalDestination::Transfer(
+                    shieldd_sdk_shielded_pool::HostTransfer {
+                        recipient: "bank1recipient".to_owned(),
+                    },
+                ),
+            };
+            shieldd_sdk_shielded_pool::test_plan_helpers::host_withdrawal(
+                vec![ShieldedInputPlan::new(&mut OsRng, note, position)],
+                None,
+                withdrawal,
+                Fr::rand(&mut OsRng),
+            )
+            .expect("valid host withdrawal plan")
+        })
 }
 
 fn transfer_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = TransferPlan> {
@@ -293,8 +227,7 @@ fn action_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = ActionPla
         transfer_plan_strategy(fvk).prop_map(ActionPlan::Transfer),
         note_reshape_two_to_one_plan_strategy(fvk).prop_map(ActionPlan::NoteReshape),
         note_reshape_one_to_eight_plan_strategy(fvk).prop_map(ActionPlan::NoteReshape),
-        ibc_action_strategy().prop_map(ActionPlan::IbcAction),
-        shielded_ics20_withdrawal_plan_strategy(fvk).prop_map(ActionPlan::ShieldedIcs20Withdrawal),
+        shielded_host_withdrawal_plan_strategy(fvk).prop_map(ActionPlan::ShieldedHostWithdrawal),
     ]
 }
 
@@ -329,7 +262,6 @@ fn transaction_plan_strategy(fvk: &FullViewingKey) -> impl Strategy<Value = Tran
             let nonce = match action {
                 ActionPlan::Transfer(plan) => &mut plan.compliance.nonce,
                 ActionPlan::NoteReshape(plan) => &mut plan.compliance.nonce,
-                ActionPlan::ShieldedIcs20Withdrawal(plan) => &mut plan.compliance.nonce,
                 ActionPlan::ShieldedHostWithdrawal(plan) => &mut plan.compliance.nonce,
                 _ => continue,
             };

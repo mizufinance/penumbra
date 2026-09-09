@@ -1,9 +1,8 @@
 use shieldd_sdk_proto::core::transaction::v1::Transaction as ProtoTransaction;
-use shieldd_sdk_proto::Message;
 
 use super::types::{
-    ActionRef, ClearFlowEvent, ClearFlowKind, ComplianceCiphertextKind, ComplianceRecordRef,
-    ExtractedComplianceCiphertext, OutputRef, PublicWithdrawalData, TxRef,
+    ActionRef, ComplianceCiphertextKind, ComplianceRecordRef, ExtractedComplianceCiphertext,
+    OutputRef, PublicWithdrawalData, TxRef,
 };
 
 pub fn extract_compliance_ciphertexts(
@@ -67,22 +66,7 @@ pub fn extract_compliance_ciphertexts(
                     public_withdrawal: Some(public_withdrawal),
                 });
             }
-            Some(Action::ShieldedIcs20Withdrawal(withdrawal)) => {
-                let Some(body) = withdrawal.body.as_ref() else {
-                    continue;
-                };
-                let Some(public_withdrawal) = ics20_withdrawal_data(body) else {
-                    continue;
-                };
-                results.push(ExtractedComplianceCiphertext {
-                    record_ref: ComplianceRecordRef::Ics20Withdrawal(action_ref),
-                    kind: ComplianceCiphertextKind::Withdrawal,
-                    routing_tags: [body.routing_tag.as_ref().map_or(0, |tag| tag.value), 0],
-                    raw_bytes: body.withdrawal_compliance_ciphertext.clone(),
-                    metadata_bytes: None,
-                    public_withdrawal: Some(public_withdrawal),
-                });
-            }
+
             _ => {}
         }
     }
@@ -117,118 +101,6 @@ fn host_withdrawal_data(
         amount: value.amount,
         self_address,
         destination,
-    })
-}
-
-fn ics20_withdrawal_data(
-    body: &shieldd_sdk_proto::core::component::shielded_pool::v1::ShieldedIcs20WithdrawalBody,
-) -> Option<PublicWithdrawalData> {
-    let withdrawal = body.withdrawal.as_ref()?;
-    let amount = withdrawal.amount?.try_into().ok()?;
-    let denom: shieldd_sdk_asset::asset::Metadata =
-        withdrawal.denom.as_ref()?.denom.as_str().try_into().ok()?;
-    let self_address = withdrawal
-        .return_address
-        .clone()
-        .and_then(|address| shieldd_sdk_keys::Address::try_from(address).ok())
-        .map(|address| address.to_string());
-    Some(PublicWithdrawalData {
-        asset_id: denom.id(),
-        amount,
-        self_address,
-        destination: withdrawal.destination_chain_address.clone(),
-    })
-}
-
-pub fn extract_clear_flows(tx_ref: &TxRef, tx: &ProtoTransaction) -> Vec<ClearFlowEvent> {
-    use shieldd_sdk_proto::core::transaction::v1::action::Action;
-
-    let Some(body) = &tx.body else {
-        return vec![];
-    };
-
-    let mut results = Vec::new();
-    for (action_index, action) in body.actions.iter().enumerate() {
-        let output_ref = OutputRef {
-            action: ActionRef {
-                tx: tx_ref.clone(),
-                action_index: action_index as u32,
-            },
-            output_index: 0,
-        };
-
-        match action.action.as_ref() {
-            Some(Action::IbcRelayAction(relay)) => {
-                if let Some(event) = extract_ibc_shield(&output_ref, relay) {
-                    results.push(event);
-                }
-            }
-            Some(Action::ShieldedIcs20Withdrawal(withdrawal)) => {
-                if let Some(event) = extract_ics20_withdrawal(&output_ref, withdrawal) {
-                    results.push(event);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    results
-}
-
-fn extract_ibc_shield(
-    output_ref: &OutputRef,
-    relay: &shieldd_sdk_proto::core::component::ibc::v1::IbcRelay,
-) -> Option<ClearFlowEvent> {
-    let raw_action = relay.raw_action.as_ref()?;
-    if !raw_action
-        .type_url
-        .ends_with("ibc.core.channel.v1.MsgRecvPacket")
-    {
-        return None;
-    }
-    let msg =
-        ibc_proto::ibc::core::channel::v1::MsgRecvPacket::decode(raw_action.value.as_ref()).ok()?;
-    let packet = msg.packet?;
-    let packet_data: shieldd_sdk_proto::core::component::ibc::v1::FungibleTokenPacketData =
-        serde_json::from_slice(packet.data.as_slice()).ok()?;
-    let metadata: shieldd_sdk_asset::asset::Metadata =
-        packet_data.denom.as_str().try_into().ok()?;
-    let amount: shieldd_sdk_num::Amount = packet_data.amount.try_into().ok()?;
-
-    Some(ClearFlowEvent {
-        output_ref: output_ref.clone(),
-        kind: ClearFlowKind::Shield,
-        asset_id: metadata.id(),
-        amount,
-        self_address: Some(packet_data.receiver),
-        counterparty: Some(packet_data.sender.clone()),
-        public_address: Some(packet_data.sender),
-    })
-}
-
-fn extract_ics20_withdrawal(
-    output_ref: &OutputRef,
-    withdrawal: &shieldd_sdk_proto::core::component::shielded_pool::v1::ShieldedIcs20Withdrawal,
-) -> Option<ClearFlowEvent> {
-    let body = withdrawal.body.as_ref()?;
-    let payload = body.withdrawal.as_ref()?;
-    let denom = payload.denom.clone()?;
-    let metadata: shieldd_sdk_asset::asset::Metadata = denom.denom.as_str().try_into().ok()?;
-    let amount: shieldd_sdk_num::Amount = payload.amount?.try_into().ok()?;
-    let return_address = payload
-        .return_address
-        .clone()
-        .and_then(|address| shieldd_sdk_keys::Address::try_from(address).ok())
-        .map(|address| address.to_string());
-
-    Some(ClearFlowEvent {
-        output_ref: output_ref.clone(),
-        kind: ClearFlowKind::Withdraw,
-        asset_id: metadata.id(),
-        amount,
-        self_address: return_address,
-        counterparty: Some(payload.destination_chain_address.clone()),
-        public_address: Some(payload.destination_chain_address.clone()),
     })
 }
 
@@ -324,67 +196,43 @@ mod tests {
 
     #[test]
     fn extract_ciphertexts_uses_typed_withdrawal_refs_and_public_facts() {
-        use shieldd_sdk_proto::core::component::{
-            ibc::v1::Ics20Withdrawal,
-            shielded_pool::v1::{
-                host_withdrawal::Destination, HostTransfer, HostWithdrawal, ShieldedHostWithdrawal,
-                ShieldedHostWithdrawalBody, ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalBody,
-            },
+        use shieldd_sdk_proto::core::component::shielded_pool::v1::{
+            host_withdrawal::Destination, HostTransfer, HostWithdrawal, ShieldedHostWithdrawal,
+            ShieldedHostWithdrawalBody,
         };
         let asset_id = shieldd_sdk_asset::asset::Id(decaf377::Fq::from(77u64));
         let tx = ProtoTransaction {
             body: Some(TransactionBody {
-                actions: vec![
-                    ActionProto {
-                        action: Some(Action::ShieldedHostWithdrawal(ShieldedHostWithdrawal {
-                            body: Some(ShieldedHostWithdrawalBody {
-                                withdrawal: Some(HostWithdrawal {
-                                    value: Some(
-                                        shieldd_sdk_asset::Value {
-                                            amount: 12u64.into(),
-                                            asset_id,
-                                        }
-                                        .into(),
-                                    ),
-                                    destination: Some(Destination::Transfer(HostTransfer {
-                                        recipient: "0xabc".to_owned(),
-                                    })),
-                                }),
-                                routing_tag: Some(RoutingTag { value: 31 }),
-                                withdrawal_compliance_ciphertext: vec![1; 192],
-
-                                ..Default::default()
+                actions: vec![ActionProto {
+                    action: Some(Action::ShieldedHostWithdrawal(ShieldedHostWithdrawal {
+                        body: Some(ShieldedHostWithdrawalBody {
+                            withdrawal: Some(HostWithdrawal {
+                                value: Some(
+                                    shieldd_sdk_asset::Value {
+                                        amount: 12u64.into(),
+                                        asset_id,
+                                    }
+                                    .into(),
+                                ),
+                                destination: Some(Destination::Transfer(HostTransfer {
+                                    recipient: "0xabc".to_owned(),
+                                })),
                             }),
-                            ..Default::default()
-                        })),
-                    },
-                    ActionProto {
-                        action: Some(Action::ShieldedIcs20Withdrawal(ShieldedIcs20Withdrawal {
-                            body: Some(ShieldedIcs20WithdrawalBody {
-                                withdrawal: Some(Ics20Withdrawal {
-                                    amount: Some(shieldd_sdk_num::Amount::from(34u64).into()),
-                                    denom: Some(shieldd_sdk_proto::core::asset::v1::Denom {
-                                        denom: "utest".to_owned(),
-                                    }),
-                                    destination_chain_address: "cosmos1dest".to_owned(),
-                                    ..Default::default()
-                                }),
-                                routing_tag: Some(RoutingTag { value: 41 }),
-                                withdrawal_compliance_ciphertext: vec![3; 192],
+                            routing_tag: Some(RoutingTag { value: 31 }),
+                            withdrawal_compliance_ciphertext: vec![1; 192],
 
-                                ..Default::default()
-                            }),
                             ..Default::default()
-                        })),
-                    },
-                ],
+                        }),
+                        ..Default::default()
+                    })),
+                }],
                 ..Default::default()
             }),
             ..Default::default()
         };
 
         let extracted = extract_compliance_ciphertexts(&tx_ref(), &tx);
-        assert_eq!(extracted.len(), 2);
+        assert_eq!(extracted.len(), 1);
         assert!(matches!(
             extracted[0].record_ref,
             ComplianceRecordRef::HostWithdrawal(_)
@@ -397,19 +245,6 @@ mod tests {
         assert_eq!(
             extracted[0].public_withdrawal.as_ref().unwrap().destination,
             "0xabc"
-        );
-        assert!(matches!(
-            extracted[1].record_ref,
-            ComplianceRecordRef::Ics20Withdrawal(_)
-        ));
-        assert_eq!(extracted[1].routing_tags, [41, 0]);
-        assert_eq!(
-            extracted[1].public_withdrawal.as_ref().unwrap().amount,
-            34u64.into()
-        );
-        assert_eq!(
-            extracted[1].public_withdrawal.as_ref().unwrap().destination,
-            "cosmos1dest"
         );
     }
 }

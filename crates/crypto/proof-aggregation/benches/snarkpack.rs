@@ -12,7 +12,7 @@ use shieldd_sdk_proof_aggregation::{
     ProofFamilyId, AGGREGATE_PROTOCOL_VERSION,
 };
 use shieldd_sdk_proof_params::batch::BatchItem;
-use shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
+use shieldd_sdk_shielded_pool::ShieldedWithdrawalFamilyId;
 use std::env;
 use std::path::PathBuf;
 
@@ -190,7 +190,7 @@ fn snarkpack_bench(c: &mut Criterion) {
         vec![
             ProofFamilyId::Transfer,
             ProofFamilyId::NoteReshape(shieldd_sdk_shielded_pool::NOTE_RESHAPE_FAMILY_SPECS[0].id),
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+            ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical),
         ]
     };
 

@@ -109,21 +109,21 @@ func init() {
 			packResult: packNoteReshapeProofResult,
 		}
 	}
-	for _, family := range generated.ShieldedIcs20WithdrawalFamilies {
+	for _, family := range generated.ShieldedWithdrawalFamilies {
 		family := family
 		circuitConfigs[family.Label] = circuitConfig{
 			name: family.Label,
 			template: func() frontend.Circuit {
-				return circuits.NewShieldedIcs20WithdrawalCircuit(family.NIn)
+				return circuits.NewShieldedWithdrawalCircuit(family.NIn)
 			},
 			newAssignment: func(payload []byte) (frontend.Circuit, error) {
-				assignment, witnessFamily, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(payload)
+				assignment, witnessFamily, err := abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(payload)
 				if err != nil {
 					return nil, err
 				}
 				if witnessFamily.ID != family.ID {
 					return nil, fmt.Errorf(
-						"shielded ICS-20 withdrawal witness family mismatch: got %s (%d), expected %s (%d)",
+						"shielded withdrawal witness family mismatch: got %s (%d), expected %s (%d)",
 						witnessFamily.Label,
 						witnessFamily.ID,
 						family.Label,
@@ -132,7 +132,7 @@ func init() {
 				}
 				return assignment, nil
 			},
-			packResult: packShieldedIcs20WithdrawalProofResult,
+			packResult: packShieldedWithdrawalProofResult,
 		}
 	}
 	circuitConfigs["note_seizure"] = circuitConfig{
@@ -150,7 +150,7 @@ func init() {
 func main() {
 	logger.Disable()
 
-	circuit := flag.String("circuit", "", "transfer, note-reshape, shielded-ics20-withdrawal, or note-seizure family label")
+	circuit := flag.String("circuit", "", "transfer, note-reshape, shielded-withdrawal, or note-seizure family label")
 	artifactDir := flag.String("artifact-dir", "", "directory containing gnark artifacts")
 	flag.Parse()
 
@@ -326,10 +326,10 @@ func writeResponse(writer *bufio.Writer, status uint32, payload []byte) error {
 	return writer.Flush()
 }
 
-func packShieldedIcs20WithdrawalProofResult(witnessPayload []byte, proof *groth16bls.Proof, proveMS float64) ([]byte, error) {
-	witness, _, err := abi.DecodeShieldedIcs20WithdrawalWitness(witnessPayload)
+func packShieldedWithdrawalProofResult(witnessPayload []byte, proof *groth16bls.Proof, proveMS float64) ([]byte, error) {
+	witness, _, err := abi.DecodeShieldedWithdrawalWitness(witnessPayload)
 	if err != nil {
-		return nil, fmt.Errorf("decode shielded ICS-20 withdrawal witness: %w", err)
+		return nil, fmt.Errorf("decode shielded withdrawal witness: %w", err)
 	}
 	return packProofResult("PIPR", witness.ClaimedStatementHash, proof, proveMS)
 }

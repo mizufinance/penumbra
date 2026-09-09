@@ -20,13 +20,12 @@ use crate::{
     note_reshape_padding::{
         dummy_spend_auth_sig, dummy_state_commitment_proof, pad_to_len, HiddenArityPadder,
     },
-    HostWithdrawal, ShieldedHostWithdrawal, ShieldedIcs20WithdrawalChangeBody,
-    ShieldedIcs20WithdrawalChangePrivate, ShieldedIcs20WithdrawalChangePublic,
-    ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalInputPublic,
-    ShieldedIcs20WithdrawalOptionalInputPrivate, ShieldedIcs20WithdrawalProof,
-    ShieldedIcs20WithdrawalProofPrivate, ShieldedIcs20WithdrawalProofPublic,
-    ShieldedIcs20WithdrawalRequiredInputPrivate, ShieldedInputPlan, ShieldedOutputPlan,
-    TransferInputBody, VolumeAccumulatorPlan,
+    HostWithdrawal, ShieldedHostWithdrawal, ShieldedInputPlan, ShieldedOutputPlan,
+    ShieldedWithdrawalChangeBody, ShieldedWithdrawalChangePrivate, ShieldedWithdrawalChangePublic,
+    ShieldedWithdrawalFamilyId, ShieldedWithdrawalInputPublic,
+    ShieldedWithdrawalOptionalInputPrivate, ShieldedWithdrawalProof,
+    ShieldedWithdrawalProofPrivate, ShieldedWithdrawalProofPublic,
+    ShieldedWithdrawalRequiredInputPrivate, TransferInputBody, VolumeAccumulatorPlan,
 };
 
 use super::ShieldedHostWithdrawalBody;
@@ -71,8 +70,8 @@ impl ShieldedHostWithdrawalPlan {
         Ok(plan)
     }
 
-    pub fn family_id(&self) -> ShieldedIcs20WithdrawalFamilyId {
-        ShieldedIcs20WithdrawalFamilyId::Canonical
+    pub fn family_id(&self) -> ShieldedWithdrawalFamilyId {
+        ShieldedWithdrawalFamilyId::Canonical
     }
 
     pub fn accumulator_prior_commitment(&self) -> Option<tct::StateCommitment> {
@@ -144,9 +143,7 @@ impl ShieldedHostWithdrawalPlan {
             sender_address: self.sender_address(),
             asset_id: self.withdrawal_asset_id(),
             capk: self.compliance.witness.sender.leaf.capk,
-            // Host withdrawals reuse the ICS-20 circuit and its fixed dummy-nullifier domain.
-            nullifier_domain_sep_label:
-                b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.nullifier",
+            nullifier_domain_sep_label: b"shieldd.shielded_withdrawal.synthetic_dummy.nullifier",
             nullifier_seed_label:
                 b"shieldd.shielded_host_withdrawal.synthetic_dummy.nullifier_seed",
             spend_auth_key_label:
@@ -220,7 +217,7 @@ impl ShieldedHostWithdrawalPlan {
 
     fn withdrawal_effect_hash_limbs(&self) -> [Fq; 4] {
         let effect_hash = self.withdrawal.effect_hash();
-        crate::shielded_ics20_withdrawal::withdrawal_effect_hash_limbs(effect_hash.as_bytes())
+        crate::shielded_withdrawal::withdrawal_effect_hash_limbs(effect_hash.as_bytes())
     }
 
     fn withdrawal_compliance_encryption(&self) -> anyhow::Result<WithdrawalEncryptionResult> {
@@ -243,8 +240,8 @@ impl ShieldedHostWithdrawalPlan {
         recent_position_floor: u64,
     ) -> Result<
         (
-            ShieldedIcs20WithdrawalProofPublic,
-            ShieldedIcs20WithdrawalProofPrivate,
+            ShieldedWithdrawalProofPublic,
+            ShieldedWithdrawalProofPrivate,
         ),
         crate::ProofError,
     > {
@@ -272,7 +269,7 @@ impl ShieldedHostWithdrawalPlan {
             .spends
             .iter()
             .map(|spend| {
-                Ok(ShieldedIcs20WithdrawalInputPublic {
+                Ok(ShieldedWithdrawalInputPublic {
                     nullifier: spend.nullifier(&nullifier_key),
                     rk: spend.rk(fvk),
                     history_required: shieldd_sdk_sct::nullifier_generation::is_old(
@@ -285,7 +282,7 @@ impl ShieldedHostWithdrawalPlan {
             .collect::<Result<Vec<_>, crate::ProofError>>()?;
         let padder = self.padder();
         pad_to_len(&mut input_publics, PADDED_HOST_WITHDRAWAL_INPUTS, |slot| {
-            ShieldedIcs20WithdrawalInputPublic {
+            ShieldedWithdrawalInputPublic {
                 nullifier: padder.synthetic_dummy_nullifier(slot),
                 rk: padder.synthetic_dummy_verification_key(slot),
                 history_required: false,
@@ -297,7 +294,7 @@ impl ShieldedHostWithdrawalPlan {
             .iter()
             .zip(state_commitment_proofs.iter().cloned())
             .map(
-                |(spend, state_commitment_proof)| ShieldedIcs20WithdrawalRequiredInputPrivate {
+                |(spend, state_commitment_proof)| ShieldedWithdrawalRequiredInputPrivate {
                     state_commitment_proof,
                     spent_note: spend.note.clone(),
                     spend_auth_randomizer: spend.randomizer,
@@ -312,8 +309,8 @@ impl ShieldedHostWithdrawalPlan {
             || {
                 let slot = 1;
                 let dummy_note = padder.synthetic_dummy_input_note(slot);
-                ShieldedIcs20WithdrawalOptionalInputPrivate {
-                    spend: ShieldedIcs20WithdrawalRequiredInputPrivate {
+                ShieldedWithdrawalOptionalInputPrivate {
+                    spend: ShieldedWithdrawalRequiredInputPrivate {
                         state_commitment_proof: dummy_state_commitment_proof(dummy_note.commit()),
                         spent_note: dummy_note,
                         spend_auth_randomizer: padder.synthetic_dummy_spend_auth_randomizer(slot),
@@ -322,7 +319,7 @@ impl ShieldedHostWithdrawalPlan {
                     dummy_nullifier_seed: padder.synthetic_dummy_nullifier_seed(slot),
                 }
             },
-            |spend| ShieldedIcs20WithdrawalOptionalInputPrivate {
+            |spend| ShieldedWithdrawalOptionalInputPrivate {
                 spend,
                 is_dummy: false,
                 dummy_nullifier_seed: Fq::from(0u64),
@@ -355,15 +352,15 @@ impl ShieldedHostWithdrawalPlan {
         };
 
         Ok((
-            ShieldedIcs20WithdrawalProofPublic {
-                family_id: ShieldedIcs20WithdrawalFamilyId::Canonical,
+            ShieldedWithdrawalProofPublic {
+                family_id: ShieldedWithdrawalFamilyId::Canonical,
                 anchor,
                 balance_commitment: Balance::default().commit(self.value_blinding),
                 asset_anchor: self.compliance.witness.asset.root,
                 compliance_anchor: self.compliance.witness.user_root,
                 target_timestamp: Fq::from(self.compliance.timestamp),
                 inputs: input_publics,
-                change_output: ShieldedIcs20WithdrawalChangePublic {
+                change_output: ShieldedWithdrawalChangePublic {
                     note_commitment: change_note.commit(),
                     recovery_commitment: change_note.recovery_commitment(),
                 },
@@ -380,8 +377,8 @@ impl ShieldedHostWithdrawalPlan {
                     day_start: volume_payload.day_start,
                 },
             },
-            ShieldedIcs20WithdrawalProofPrivate {
-                family_id: ShieldedIcs20WithdrawalFamilyId::Canonical,
+            ShieldedWithdrawalProofPrivate {
+                family_id: ShieldedWithdrawalFamilyId::Canonical,
                 action_balance_blinding: self.value_blinding,
                 ak: *fvk.spend_verification_key(),
                 nk: *fvk.nullifier_key(),
@@ -398,7 +395,7 @@ impl ShieldedHostWithdrawalPlan {
                 withdrawal_randomizer: withdrawal_compliance.r,
                 required_input,
                 optional_input,
-                change_output: ShieldedIcs20WithdrawalChangePrivate {
+                change_output: ShieldedWithdrawalChangePrivate {
                     created_note: change_note,
                 },
                 volume_accumulator_seed: Fq::from_le_bytes_mod_order(
@@ -457,7 +454,7 @@ impl ShieldedHostWithdrawalPlan {
             change_note.transmission_key(),
             &change_note.diversified_generator(),
         );
-        let change_output = ShieldedIcs20WithdrawalChangeBody {
+        let change_output = ShieldedWithdrawalChangeBody {
             note_payload: change_note.payload(recovery_capsule),
             wrapped_memo_key,
             ovk_wrapped_key,
@@ -472,7 +469,7 @@ impl ShieldedHostWithdrawalPlan {
         let withdrawal_compliance = self.withdrawal_compliance_encryption()?;
 
         Ok(ShieldedHostWithdrawalBody {
-            family_id: ShieldedIcs20WithdrawalFamilyId::Canonical,
+            family_id: ShieldedWithdrawalFamilyId::Canonical,
             anchor,
             balance_commitment: Balance::default().commit(self.value_blinding),
             inputs,
@@ -514,7 +511,7 @@ impl ShieldedHostWithdrawalPlan {
             anchor,
             recent_position_floor,
         )?;
-        let proof = ShieldedIcs20WithdrawalProof::prove(public, private)?;
+        let proof = ShieldedWithdrawalProof::prove(public, private)?;
         let mut auth_sigs = auth_sigs;
         while auth_sigs.len() < PADDED_HOST_WITHDRAWAL_INPUTS {
             auth_sigs.push(dummy_spend_auth_sig());
@@ -533,7 +530,7 @@ impl ShieldedHostWithdrawalPlan {
         auth_sigs: Vec<Signature<SpendAuth>>,
         anchor: tct::Root,
         memo_key: &PayloadKey,
-        proof: ShieldedIcs20WithdrawalProof,
+        proof: ShieldedWithdrawalProof,
         recent_position_floor: u64,
     ) -> Result<ShieldedHostWithdrawal, crate::ProofError> {
         let body = self
@@ -637,13 +634,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        HostTransfer, HostWithdrawalDestination, Note, ShieldedIcs20WithdrawalProof,
-        ShieldedIcs20WithdrawalProofPrivate, ShieldedIcs20WithdrawalProofPublic,
+        HostTransfer, HostWithdrawalDestination, Note, ShieldedWithdrawalProof,
+        ShieldedWithdrawalProofPrivate, ShieldedWithdrawalProofPublic,
     };
 
     fn padded_proof_inputs() -> (
-        ShieldedIcs20WithdrawalProofPublic,
-        ShieldedIcs20WithdrawalProofPrivate,
+        ShieldedWithdrawalProofPublic,
+        ShieldedWithdrawalProofPrivate,
     ) {
         let value = Value {
             amount: 42u64.into(),
@@ -730,7 +727,7 @@ mod tests {
         let (public, private) = padded_proof_inputs();
         let dummy = &private.optional_input;
         let domain = Fq::from_le_bytes_mod_order(
-            blake2b_simd::blake2b(b"shieldd.shielded_ics20_withdrawal.synthetic_dummy.nullifier")
+            blake2b_simd::blake2b(b"shieldd.shielded_withdrawal.synthetic_dummy.nullifier")
                 .as_bytes(),
         );
         let expected = Nullifier(poseidon377::hash_3(
@@ -772,7 +769,7 @@ mod tests {
             .expect("proof test prerequisites must be present");
 
         let (public, private) = padded_proof_inputs();
-        let proof = ShieldedIcs20WithdrawalProof::prove(public.clone(), private)
+        let proof = ShieldedWithdrawalProof::prove(public.clone(), private)
             .expect("padded host withdrawal proof should generate");
         proof
             .verify(&public)
@@ -1050,7 +1047,7 @@ mod admission_tests {
                 Vec::new(),
                 anchor,
                 &PayloadKey::random_key(&mut OsRng),
-                ShieldedIcs20WithdrawalProof::default(),
+                ShieldedWithdrawalProof::default(),
                 0,
             )
             .expect_err("action materialization must require one signature per real spend");

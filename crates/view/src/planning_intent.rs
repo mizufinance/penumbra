@@ -2,7 +2,7 @@ use decaf377::Fr;
 use shieldd_sdk_fee::Gas;
 use shieldd_sdk_sct::nullifier_generation::NullifierWindow;
 use shieldd_sdk_shielded_pool::{
-    HostWithdrawal, Ics20Withdrawal, NoteReshapeFamilyId, ShieldedInputPlan, ShieldedOutputPlan,
+    HostWithdrawal, NoteReshapeFamilyId, ShieldedInputPlan, ShieldedOutputPlan,
 };
 use shieldd_sdk_transaction::{
     gas::{self, GasCost},
@@ -26,10 +26,10 @@ pub struct NoteReshapeIntent {
 }
 
 #[derive(Clone, Debug)]
-pub struct WithdrawalIntent<W> {
+pub struct WithdrawalIntent {
     pub spends: Vec<ShieldedInputPlan>,
     pub change_output: Option<ShieldedOutputPlan>,
-    pub withdrawal: W,
+    pub withdrawal: HostWithdrawal,
     pub value_blinding: Fr,
 }
 
@@ -37,8 +37,7 @@ pub struct WithdrawalIntent<W> {
 pub enum ActionIntent {
     Transfer(TransferIntent),
     NoteReshape(NoteReshapeIntent),
-    Ics20Withdrawal(WithdrawalIntent<Ics20Withdrawal>),
-    HostWithdrawal(WithdrawalIntent<HostWithdrawal>),
+    HostWithdrawal(WithdrawalIntent),
     Complete(ActionPlan),
 }
 
@@ -47,7 +46,6 @@ impl ActionIntent {
         match self {
             Self::Transfer(intent) => &intent.spends,
             Self::NoteReshape(intent) => &intent.spends,
-            Self::Ics20Withdrawal(intent) => &intent.spends,
             Self::HostWithdrawal(intent) => &intent.spends,
             Self::Complete(action) => action.spends(),
         }
@@ -57,7 +55,6 @@ impl ActionIntent {
         match self {
             Self::Transfer(intent) => &intent.outputs,
             Self::NoteReshape(intent) => &intent.outputs,
-            Self::Ics20Withdrawal(intent) => intent.change_output.as_slice(),
             Self::HostWithdrawal(intent) => intent.change_output.as_slice(),
             Self::Complete(_) => &[],
         }
@@ -72,7 +69,6 @@ impl GasCost for ActionIntent {
                 intent.family_id.input_count(),
                 intent.family_id.output_count(),
             ),
-            Self::Ics20Withdrawal(_) => gas::shielded_withdrawal_gas_cost(),
             Self::HostWithdrawal(intent) => gas::host_withdrawal_gas_cost(&intent.withdrawal),
             Self::Complete(action) => action.gas_cost(),
         }
@@ -116,7 +112,6 @@ impl TransactionIntent {
                     ActionPlan::Transfer(_)
                         | ActionPlan::NoteReshape(_)
                         | ActionPlan::ShieldedHostWithdrawal(_)
-                        | ActionPlan::ShieldedIcs20Withdrawal(_)
                 ),
                 _ => true,
             })
@@ -133,13 +128,9 @@ impl From<NoteReshapeIntent> for ActionIntent {
         Self::NoteReshape(intent)
     }
 }
-impl From<WithdrawalIntent<Ics20Withdrawal>> for ActionIntent {
-    fn from(intent: WithdrawalIntent<Ics20Withdrawal>) -> Self {
-        Self::Ics20Withdrawal(intent)
-    }
-}
-impl From<WithdrawalIntent<HostWithdrawal>> for ActionIntent {
-    fn from(intent: WithdrawalIntent<HostWithdrawal>) -> Self {
+
+impl From<WithdrawalIntent> for ActionIntent {
+    fn from(intent: WithdrawalIntent) -> Self {
         Self::HostWithdrawal(intent)
     }
 }

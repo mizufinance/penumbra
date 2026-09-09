@@ -231,14 +231,9 @@ mod tests {
         }
     }
 
-    /// Backs ZK-ASSUME-ICS20-SUPPLY-CONSERVATION: the denom-trace -> asset-id
-    /// derivation must be injective, or two distinct source denoms would alias
-    /// one shielded asset id and share a single `ics20_value_balance` counter,
-    /// breaking per-denom supply accounting. `from_raw_denom` is a pure function
-    /// of the exact (prefixed) denom string, so distinct multi-hop traces must
-    /// yield distinct ids and a prefixed trace must never collide with its base.
+    /// Distinct canonical denominations must produce distinct asset identifiers.
     #[test]
-    fn denom_trace_to_asset_id_is_injective() {
+    fn distinct_denom_trace_examples_have_distinct_asset_ids() {
         // Representative corpus: bases, single-hop and multi-hop ICS-20 traces,
         // and adversarial near-collisions (channel-index boundary, base that
         // itself contains path separators).

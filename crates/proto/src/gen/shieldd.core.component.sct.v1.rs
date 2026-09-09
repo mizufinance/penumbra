@@ -62,7 +62,7 @@ impl ::prost::Name for Epoch {
 /// decide whether or not to download block data.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitmentSource {
-    #[prost(oneof = "commitment_source::Source", tags = "1, 2, 40")]
+    #[prost(oneof = "commitment_source::Source", tags = "1, 40")]
     pub source: ::core::option::Option<commitment_source::Source>,
 }
 /// Nested message and enum types in `CommitmentSource`.
@@ -104,35 +104,10 @@ pub mod commitment_source {
             "/shieldd.core.component.sct.v1.CommitmentSource.Transaction".into()
         }
     }
-    /// The commitment was created by an inbound ICS20 transfer.
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Ics20Transfer {
-        /// The sequence number of the packet that triggered the transfer
-        #[prost(uint64, tag = "1")]
-        pub packet_seq: u64,
-        /// The channel id the transfer happened on
-        #[prost(string, tag = "2")]
-        pub channel_id: ::prost::alloc::string::String,
-        /// The sender address on the counterparty chain
-        #[prost(string, tag = "3")]
-        pub sender: ::prost::alloc::string::String,
-    }
-    impl ::prost::Name for Ics20Transfer {
-        const NAME: &'static str = "Ics20Transfer";
-        const PACKAGE: &'static str = "shieldd.core.component.sct.v1";
-        fn full_name() -> ::prost::alloc::string::String {
-            "shieldd.core.component.sct.v1.CommitmentSource.Ics20Transfer".into()
-        }
-        fn type_url() -> ::prost::alloc::string::String {
-            "/shieldd.core.component.sct.v1.CommitmentSource.Ics20Transfer".into()
-        }
-    }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Source {
         #[prost(message, tag = "1")]
         Transaction(Transaction),
-        #[prost(message, tag = "2")]
-        Ics20Transfer(Ics20Transfer),
         #[prost(message, tag = "40")]
         Genesis(Genesis),
     }

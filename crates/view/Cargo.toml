@@ -22,14 +22,12 @@ decaf377 = {workspace = true, default-features = true}
 digest = "0.9"
 genawaiter = "0.99"
 hex = {workspace = true}
-ibc-types = {workspace = true, default-features = false}
 once_cell = {workspace = true}
 shieldd-sdk-app = {workspace = true, default-features = false}
 shieldd-sdk-asset = {workspace = true, default-features = true}
 shieldd-sdk-compact-block = {workspace = true, default-features = false}
 shieldd-sdk-compliance = {workspace = true, default-features = false}
 shieldd-sdk-fee = {workspace = true, default-features = false}
-shieldd-sdk-ibc = {workspace = true, default-features = false}
 shieldd-sdk-keys = {workspace = true, default-features = true}
 shieldd-sdk-num = {workspace = true, default-features = true}
 shieldd-sdk-proof-params = {workspace = true, default-features = false}

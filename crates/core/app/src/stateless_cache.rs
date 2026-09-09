@@ -173,16 +173,12 @@ fn proof_family_and_key_for_action(
             ProofFamilyId::NoteReshape(action.body.family_id),
             action.body.family_id.deployed_proof_key(),
         )),
-        Action::ShieldedIcs20Withdrawal(action) => Some((
-            ProofFamilyId::ShieldedIcs20Withdrawal(action.body.family_id),
-            action.body.family_id.deployed_proof_key(),
-        )),
+
         Action::ShieldedHostWithdrawal(action) => Some((
-            ProofFamilyId::ShieldedIcs20Withdrawal(action.body.family_id),
+            ProofFamilyId::ShieldedWithdrawal(action.body.family_id),
             action.body.family_id.deployed_proof_key(),
         )),
-        Action::IbcRelay(_)
-        | Action::ComplianceRegisterAsset(_)
+        Action::ComplianceRegisterAsset(_)
         | Action::ComplianceRegisterUser(_)
         | Action::AggregateBundle(_) => None,
     }

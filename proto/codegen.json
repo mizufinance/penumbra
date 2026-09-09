@@ -8,7 +8,6 @@
     "shieldd/core/component/compact_block/v1/compact_block.proto",
     "shieldd/core/component/compliance/v1/compliance.proto",
     "shieldd/core/component/fee/v1/fee.proto",
-    "shieldd/core/component/ibc/v1/ibc.proto",
     "shieldd/core/component/sct/v1/sct.proto",
     "shieldd/core/component/shielded_pool/v1/shielded_pool.proto",
     "shieldd/core/keys/v1/keys.proto",
@@ -20,14 +19,9 @@
     "shieldd/custody/v1/custody.proto",
     "shieldd/custody/threshold/v1/threshold.proto",
     "shieldd/view/v1/view.proto",
-    "shieldd/execution_client/v1/execution_client.proto",
-    "ibc/applications/transfer/v1/query.proto",
-    "ibc/core/channel/v1/query.proto",
-    "ibc/core/client/v1/query.proto",
-    "ibc/core/connection/v1/query.proto"
+    "shieldd/execution_client/v1/execution_client.proto"
   ],
   "rust_packages": [
-    "cosmos.base.query.v1beta1",
     "cosmos.base.v1beta1",
     "shieldd.cnidarium.v1",
     "shieldd.core.app.v1",
@@ -35,7 +29,6 @@
     "shieldd.core.component.compact_block.v1",
     "shieldd.core.component.compliance.v1",
     "shieldd.core.component.fee.v1",
-    "shieldd.core.component.ibc.v1",
     "shieldd.core.component.sct.v1",
     "shieldd.core.component.shielded_pool.v1",
     "shieldd.core.keys.v1",
