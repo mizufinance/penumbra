@@ -745,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn historical_witness_call_requires_opt_in_storage() {
+    fn historical_witness_call_rejects_missing_nullifier() {
         let directory = tempfile::tempdir().expect("temporary database directory");
         let handle = open(directory.path());
         initialize(handle);
