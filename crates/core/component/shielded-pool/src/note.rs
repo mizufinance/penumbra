@@ -203,7 +203,7 @@ impl Note {
     }
 
     pub fn diversified_generator(&self) -> decaf377::Element {
-        self.address.diversifier().diversified_generator()
+        *self.address.diversified_generator()
     }
 
     pub fn transmission_key(&self) -> &ka::Public {

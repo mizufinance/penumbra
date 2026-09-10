@@ -8,6 +8,7 @@ license = {workspace = true}
 edition = {workspace = true}
 
 [dependencies]
+shieldd-sdk-disclosure = { workspace = true }
 anyhow = {workspace = true}
 argon2 = "0.5"
 ark-serialize = {workspace = true}

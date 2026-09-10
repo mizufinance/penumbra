@@ -1,0 +1,34 @@
+[package]
+name = "shieldd-sdk-disclosure"
+version = "2.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+proof = []
+development-artifacts = []
+prover = ["proof"]
+
+[dependencies]
+num-bigint = { workspace = true }
+base64 = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+rand_core = { workspace = true }
+decaf377 = { workspace = true }
+decaf377-ka = { workspace = true }
+decaf377-rdsa = { workspace = true }
+shieldd-sdk-keys = { workspace = true }
+shieldd-sdk-asset = { workspace = true }
+shieldd-sdk-shielded-pool = { workspace = true }
+shieldd-sdk-transaction = { workspace = true, default-features = false }
+shieldd-sdk-proto = { workspace = true }
+
+poseidon377 = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

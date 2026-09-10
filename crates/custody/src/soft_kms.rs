@@ -24,6 +24,48 @@ impl SoftKms {
         Self { config }
     }
 
+    /// Sign a fresh disclosure challenge without releasing the spending key.
+    pub fn sign_disclosure(
+        &self,
+        request: &shieldd_sdk_disclosure::DisclosureRequest,
+        public: &shieldd_sdk_disclosure::PublicOutput,
+        randomizer: [u8; 32],
+    ) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(
+            request
+                .outputs
+                .iter()
+                .any(|c| c.reference == public.reference && c.spending_control),
+            "output does not request authority control"
+        );
+        let randomizer = decaf377::Fr::from_bytes_checked(&randomizer)
+            .map_err(|_| anyhow::anyhow!("invalid authorization randomizer"))?;
+        let key = self
+            .config
+            .spend_key
+            .spend_auth_key()
+            .randomize(&randomizer);
+        let verification_key = self
+            .config
+            .spend_key
+            .full_viewing_key()
+            .spend_verification_key()
+            .randomize(&randomizer);
+        anyhow::ensure!(
+            !verification_key.is_identity(),
+            "identity authority cannot prove secret control"
+        );
+        let expected: [u8; 32] = verification_key.into();
+        anyhow::ensure!(
+            public.spend_verification_key.as_deref() == Some(expected.as_slice()),
+            "custody does not control selected Transfer authority"
+        );
+        let signature: [u8; 64] = key
+            .sign(OsRng, &shieldd_sdk_disclosure::control_message(request)?)
+            .into();
+        Ok(signature.to_vec())
+    }
+
     /// Attempt to authorize the requested [`TransactionPlan`](shieldd_sdk_transaction::TransactionPlan).
     #[tracing::instrument(skip(self, request), name = "softhsm_sign")]
     pub fn sign(&self, request: &AuthorizeRequest) -> anyhow::Result<AuthorizationData> {

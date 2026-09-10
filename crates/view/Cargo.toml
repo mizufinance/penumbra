@@ -11,9 +11,12 @@ publish = true
 [features]
 default = ["std"]
 std = []
+prover = ["shieldd-sdk-transaction/prover"]
 rpc = ["dep:tonic", "shieldd-sdk-proto/rpc"]
 
 [dependencies]
+shieldd-sdk-disclosure = { workspace = true }
+shieldd-sdk-txhash = { workspace = true }
 anyhow = {workspace = true}
 async-trait = {workspace = true}
 bytes = {workspace = true, features = ["serde"]}

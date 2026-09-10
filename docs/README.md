@@ -7,6 +7,7 @@ the area relevant to the task; each topic has one authoritative document.
 | --- | --- | --- |
 | Execution, block lifecycle, host effects | [HostExecution](../crates/core/app/src/app/host.rs), [service](../crates/bin/shieldd/src/service.rs) | [Architecture](architecture.md) |
 | Keys, notes, signing, withdrawals | [core](../crates/core), [transaction](../crates/core/transaction/src) | [Protocol](protocol.md) |
+| Voluntary disclosure | [disclosure](../crates/disclosure/src/lib.rs) | [Disclosure](disclosure.md) |
 | Wallet planning, scanning, history | [view](../crates/view/src) | [Wallet](wallet.md) |
 | Registration, detection, audit | [compliance](../crates/core/component/compliance/src) | [Flow](compliance/flow.md), [reference](compliance/reference.md) |
 | Freeze, unfreeze, seizure | [host](../crates/core/app/src/app/host.rs) | [Enforcement and seizure](compliance/enforcement-and-seizure.md) |

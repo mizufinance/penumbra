@@ -79,6 +79,18 @@ async fn execution_deliver_tx_rejects_invalid_transaction() -> Result<()> {
 
     assert_eq!(response.code, 1);
     assert!(response.log.contains("decoding transaction"));
+    client.end_block(EndBlockRequest { height: 1 }).await?;
+    client.commit(CommitRequest {}).await?;
+    let accepted = client
+        .transactions_by_height(
+            shieldd_sdk_proto::core::app::v1::TransactionsByHeightRequest { block_height: 1 },
+        )
+        .await?;
+    assert_eq!(accepted.block_height, 1);
+    assert!(
+        accepted.transactions.is_empty(),
+        "failed transaction entered accepted log"
+    );
     Ok(())
 }
 
@@ -251,5 +263,20 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
                 .with_context(|| format!("absence proof for {key}"))?;
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn transactions_query_rejects_uncommitted_height() -> Result<()> {
+    let (_storage, client) = initialized_client().await?;
+    let error = client
+        .transactions_by_height(
+            shieldd_sdk_proto::core::app::v1::TransactionsByHeightRequest {
+                block_height: u64::MAX,
+            },
+        )
+        .await
+        .expect_err("future block must not be accepted");
+    assert_eq!(error.kind(), crate::ErrorKind::FailedPrecondition);
     Ok(())
 }

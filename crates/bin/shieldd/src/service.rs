@@ -359,6 +359,33 @@ impl ExecutionService {
         })
     }
 
+    /// Returns only the transaction log of a committed block.
+    pub async fn transactions_by_height(
+        &self,
+        request: proto_app::TransactionsByHeightRequest,
+    ) -> std::result::Result<proto_app::TransactionsByHeightResponse, ServiceError> {
+        let storage = self.storage.as_ref().ok_or_else(ServiceError::closed)?;
+        if storage.latest_version() == u64::MAX {
+            return Err(ServiceError::failed_precondition(anyhow::anyhow!(
+                "Shieldd app state is not initialized"
+            )));
+        }
+        let snapshot = storage.latest_snapshot();
+        let height = snapshot
+            .get_block_height()
+            .await
+            .map_err(ServiceError::internal)?;
+        if request.block_height > height {
+            return Err(ServiceError::failed_precondition(anyhow::anyhow!(
+                "requested block is not committed"
+            )));
+        }
+        snapshot
+            .transactions_by_height(request.block_height)
+            .await
+            .map_err(ServiceError::internal)
+    }
+
     pub async fn app_parameters(
         &self,
         _request: proto_app::AppParametersRequest,

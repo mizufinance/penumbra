@@ -3,6 +3,7 @@
 Use `nix develop` for the repository toolchain, or install the Rust version in
 `rust-toolchain.toml`, Go from `tools/gnark/go.mod`, and a CGO-capable C compiler.
 Direct host integration tests use temporary storage. Bankd owns the live localnet and mobile/admin/audit smoke workflows.
+Voluntary disclosure proving uses the [local gnark backend](disclosure.md#local-proving-artifacts).
 
 | Command | Coverage |
 | --- | --- |

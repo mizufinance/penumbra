@@ -258,3 +258,9 @@ CREATE TABLE compliance_asset_policies (
     asset_id BLOB PRIMARY KEY,
     policy BLOB NOT NULL
 );
+
+CREATE TABLE disclosure_outgoing (
+    tx_id TEXT PRIMARY KEY,
+    tx_bytes BLOB NOT NULL,
+    authorities BLOB NOT NULL
+);

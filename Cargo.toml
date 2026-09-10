@@ -9,6 +9,7 @@ exclude = [
 
 # Also remember to add to deployments/scripts/rust-docs
 members = [
+  "crates/disclosure",
   "crates/bench-support",
   "crates/bench",
   "crates/bin/orbis-audit",
@@ -64,6 +65,7 @@ repository = "https://github.com/mizufinance/shieldd"
 license    = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+shieldd-sdk-disclosure = { path = "crates/disclosure", default-features = false }
 anyhow                           = { version = "1.0.75" }
 ark-bls12-377                    = { default-features = false, version = "0.5.0" }
 ark-bw6-761                      = { default-features = false, version = "0.5.0" }

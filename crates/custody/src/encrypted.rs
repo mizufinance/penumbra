@@ -178,6 +178,19 @@ impl Config {
         Ok(InnerConfig::from_bytes(&decrypted_data)?)
     }
 
+    pub fn sign_disclosure(
+        self,
+        password: &str,
+        request: &shieldd_sdk_disclosure::DisclosureRequest,
+        public: &shieldd_sdk_disclosure::PublicOutput,
+        randomizer: [u8; 32],
+    ) -> anyhow::Result<Vec<u8>> {
+        match self.decrypt(password)? {
+            InnerConfig::SoftKms(config) => soft_kms::SoftKms::new(config).sign_disclosure(request, public, randomizer),
+            InnerConfig::Threshold(_) => anyhow::bail!("disclosure signing is unavailable for threshold custody; supply an external signature"),
+        }
+    }
+
     // Attempt to convert this to a threshold config, if possible
     pub fn convert_to_threshold(self, password: &str) -> anyhow::Result<Option<threshold::Config>> {
         match self.decrypt(password)? {
@@ -254,5 +267,76 @@ impl<T: Terminal + Clone + Send + Sync + 'static> pb::custody_service_server::Cu
         request: Request<pb::ConfirmAddressRequest>,
     ) -> Result<Response<pb::ConfirmAddressResponse>, Status> {
         self.get_inner().await?.confirm_address(request).await
+    }
+}
+
+#[cfg(test)]
+mod disclosure_tests {
+    use super::*;
+    use shieldd_sdk_disclosure::*;
+    use shieldd_sdk_keys::keys::{SpendKey, SpendKeyBytes};
+
+    #[test]
+    fn encrypted_software_custody_signs_only_its_selected_authority() -> anyhow::Result<()> {
+        let key = SpendKey::try_from(SpendKeyBytes([19; 32]))?;
+        let randomizer = decaf377::Fr::from(5u64);
+        let verification_key = key
+            .full_viewing_key()
+            .spend_verification_key()
+            .randomize(&randomizer);
+        let vk: [u8; 32] = verification_key.into();
+        let reference = OutputRef {
+            transaction_id: "ab".repeat(32),
+            height: 1,
+            action: ActionRef::Body(0),
+            output: 0,
+        };
+        let mut request = DisclosureRequest {
+            version: VERSION,
+            chain_id: "test".into(),
+            recipient: Some("recipient".into()),
+            challenge: Some("fresh-challenge".into()),
+            outputs: vec![OutputClaim {
+                reference: reference.clone(),
+                amount: false,
+                asset: false,
+                recipient: false,
+                predicate: None,
+                memo: false,
+                spending_control: true,
+            }],
+            total: None,
+        };
+        let public = PublicOutput {
+            reference,
+            commitment: String::new(),
+            ephemeral_key: vec![],
+            encrypted_note: vec![],
+            wrapped_memo_key: vec![],
+            memo_ciphertext: None,
+            spend_verification_key: Some(vk.to_vec()),
+        };
+        let soft = soft_kms::Config::from(key);
+        let signer = soft_kms::SoftKms::new(soft.clone());
+        assert!(signer
+            .sign_disclosure(&request, &public, [255; 32])
+            .is_err());
+        assert!(signer
+            .sign_disclosure(&request, &public, decaf377::Fr::from(6u64).to_bytes())
+            .is_err());
+        let config = Config::create("disclosure-test-password", InnerConfig::SoftKms(soft))?;
+        let signature = config.sign_disclosure(
+            "disclosure-test-password",
+            &request,
+            &public,
+            randomizer.to_bytes(),
+        )?;
+        let signature: [u8; 64] = signature.as_slice().try_into()?;
+        verification_key.verify(&control_message(&request)?, &signature.into())?;
+        request.challenge = Some("different-challenge".into());
+        assert!(verification_key
+            .verify(&control_message(&request)?, &signature.into())
+            .is_err());
+        Ok(())
     }
 }
