@@ -10,7 +10,6 @@
 #[macro_use]
 extern crate serde_with;
 
-mod client;
 mod pre_auth;
 mod request;
 mod terminal;
@@ -20,6 +19,5 @@ pub mod policy;
 pub mod soft_kms;
 pub mod threshold;
 
-pub use client::CustodyClient;
 pub use pre_auth::PreAuthorization;
 pub use request::AuthorizeRequest;

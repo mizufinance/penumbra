@@ -6396,7 +6396,6 @@ dependencies = [
  "decaf377-frost",
  "decaf377-ka",
  "ed25519-consensus",
- "futures",
  "hex",
  "pbjson-types",
  "rand_core 0.6.4",

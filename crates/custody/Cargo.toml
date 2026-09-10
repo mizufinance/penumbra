@@ -19,7 +19,6 @@ decaf377 = {workspace = true}
 decaf377-frost = { version = "2.1.0", path = "../crypto/decaf377-frost" }
 decaf377-ka = {workspace = true}
 ed25519-consensus = {workspace = true}
-futures = {workspace = true}
 hex = {workspace = true}
 shieldd-sdk-keys = {workspace = true, default-features = true}
 shieldd-sdk-proto = {workspace = true, features = ["rpc"], default-features = true}
