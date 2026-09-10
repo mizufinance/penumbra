@@ -3,6 +3,8 @@
 Use `nix develop` for the repository toolchain, or install the Rust version in
 `rust-toolchain.toml`, Go from `tools/gnark/go.mod`, and a CGO-capable C compiler.
 Direct host integration tests use temporary storage. Bankd owns the live localnet and mobile/admin/audit smoke workflows.
+Workspace builds also require the [disclosure guest compiler](disclosure.md#cli);
+the shared CI setup installs its pinned version.
 
 | Command | Coverage |
 | --- | --- |

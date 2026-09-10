@@ -44,6 +44,7 @@ use crate::{
 };
 
 pub(crate) mod compliance;
+pub mod disclosure;
 mod sct;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]

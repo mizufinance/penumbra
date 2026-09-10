@@ -1,0 +1,11 @@
+[package]
+name = "shieldd-disclosure-methods"
+version = "2.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[build-dependencies]
+risc0-build = "=3.0.6"
+
+[package.metadata.risc0]
+methods = ["guest"]

@@ -70,6 +70,17 @@ license-files = []
 [advisories]
 yanked = "allow"
 ignore = [
+    # rzup is a build dependency used to locate/verify toolchain installations.
+    # Its publish feature is disabled; no RSA private-key operation is used.
+    # Exit: rzup drops rsa, or a patched rsa release is available.
+    "RUSTSEC-2023-0071",
+
+    # Host risc0-binfmt uses ruint only for PoVW nonce encoding, with fixed
+    # 32/96-bit shifts and no overflow-flag checks. Host builds enable std;
+    # the no-alloc U160 formatting bug is unreachable. The guest pins 1.20.0.
+    # Exit: host Rust reaches 1.90, allowing ruint >=1.20.0 here as well.
+    "RUSTSEC-2026-0220",
+
     # ed25519-dalek 1.x and curve25519-dalek 3.x are pulled in by did-key 0.2.1
     # via the orbis-rs `authn` crate. did-key has no patched release.
     # Exit: did-key drops legacy dalek pins, or orbis-rs drops did-key.

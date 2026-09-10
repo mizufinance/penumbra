@@ -9,6 +9,8 @@ exclude = [
 
 # Also remember to add to deployments/scripts/rust-docs
 members = [
+  "crates/disclosure",
+  "crates/disclosure-methods",
   "crates/bench-support",
   "crates/bench",
   "crates/bin/orbis-audit",
@@ -64,6 +66,7 @@ repository = "https://github.com/mizufinance/shieldd"
 license    = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+shieldd-sdk-disclosure = { path = "crates/disclosure", default-features = false }
 anyhow                           = { version = "1.0.75" }
 ark-bls12-377                    = { default-features = false, version = "0.5.0" }
 ark-bw6-761                      = { default-features = false, version = "0.5.0" }
@@ -186,8 +189,8 @@ getrandom                        = { version = "0.2", default-features = false }
 # no upstream release for RUSTSEC-2026-0258. This carries the upstream fix;
 # remove it once those clients migrate to reqwest 0.12.
 h2 = { path = "third_party/h2-0.3.27" }
-decaf377 = { git = "https://github.com/mizufinance/decaf377", branch = "main" }
-decaf377-rdsa = { git = "https://github.com/mizufinance/decaf377-rdsa", branch = "main" }
+decaf377 = { git = "https://github.com/mizufinance/decaf377", rev = "3cbab97f34d352b49bc1200dba839d37b223e66d" }
+decaf377-rdsa = { git = "https://github.com/mizufinance/decaf377-rdsa", rev = "fc6045f0d9de5db8c37f57fa019e390367ba17cb" }
 poseidon377 = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }
 poseidon-permutation = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }
 poseidon-parameters = { git = "https://github.com/mizufinance/poseidon377", branch = "main" }

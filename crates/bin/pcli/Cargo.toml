@@ -9,11 +9,18 @@ license = {workspace = true}
 publish = false
 
 [features]
-default = ["demo"]
+default = ["demo", "disclosure"]
+disclosure = ["dep:shieldd-sdk-disclosure", "dep:shieldd-sdk-view", "dep:tonic", "dep:tempfile", "dep:libc"]
+disclosure-prover = ["disclosure", "shieldd-sdk-disclosure/prover"]
 demo = ["shieldd-sdk-keys/demo"]
 ledger = ["dep:shieldd-sdk-custody-ledger-usb"]
 
 [dependencies]
+shieldd-sdk-disclosure = { workspace = true, features = ["proof"], optional = true }
+shieldd-sdk-view = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+libc = { version = "0.2", optional = true }
 async-trait = {workspace = true}
 anyhow = {workspace = true}
 base64 = {workspace = true}
@@ -38,7 +45,7 @@ rpassword = {workspace = true}
 serde = {workspace = true, features = ["derive"]}
 serde_json = {workspace = true}
 serde_with = {workspace = true, features = ["hex"]}
-tokio = {workspace = true, features = ["macros", "rt-multi-thread"]}
+tokio = {workspace = true, features = ["macros", "rt-multi-thread", "process", "io-util", "signal", "time"]}
 toml = {workspace = true, features = ["preserve_order"]}
 termion = {workspace = true}
 tracing = {workspace = true}

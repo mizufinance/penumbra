@@ -1,4 +1,8 @@
+#[cfg(feature = "disclosure")]
+mod disclosure;
 pub use compliance::ComplianceCmd;
+#[cfg(feature = "disclosure")]
+pub use disclosure::DisclosureCmd;
 pub use init::InitCmd;
 pub use threshold::ThresholdCmd;
 pub use view::ViewCmd;
@@ -11,6 +15,9 @@ mod view;
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
+    #[cfg(feature = "disclosure")]
+    #[clap(subcommand)]
+    Disclosure(DisclosureCmd),
     /// Initialize or reset wallet keys and custody configuration.
     Init(InitCmd),
     /// Derive wallet identifiers and addresses locally.

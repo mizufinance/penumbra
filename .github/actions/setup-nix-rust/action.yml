@@ -57,3 +57,11 @@ runs:
       with:
         prefix-key: ${{ inputs.rust-cache-prefix }}
         workspaces: ${{ inputs.rust-workspaces }}
+
+    - name: Install disclosure guest compiler
+      shell: bash
+      env:
+        CARGO_BUILD_JOBS: "2"
+      run: |
+        nix develop .#ci --command cargo install rzup --version 0.5.2 --locked --no-default-features --features cli,install
+        "$HOME/.cargo/bin/rzup" install rust 1.97.0
