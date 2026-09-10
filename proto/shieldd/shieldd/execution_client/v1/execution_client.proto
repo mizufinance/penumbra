@@ -4,69 +4,15 @@ package shieldd.execution_client.v1;
 
 import "cosmos/base/v1beta1/coin.proto";
 import "google/protobuf/timestamp.proto";
-import "shieldd/cnidarium/v1/cnidarium.proto";
 import "shieldd/core/asset/v1/asset.proto";
 import "shieldd/core/app/v1/app.proto";
-import "shieldd/core/component/compact_block/v1/compact_block.proto";
 import "shieldd/core/component/sct/v1/sct.proto";
 import "shieldd/core/component/compliance/v1/compliance.proto";
 import "shieldd/core/component/shielded_pool/v1/shielded_pool.proto";
 import "shieldd/core/keys/v1/keys.proto";
 
-// ExecutionClientService is Bankd's typed boundary for driving its embedded
-// Shieldd subsystem within the same atomic block lifecycle.
-service ExecutionClientService {
-  // InitGenesis initializes Shieldd state from full genesis content or a
-  // checkpoint supplied by the host chain.
-  rpc InitGenesis(InitGenesisRequest) returns (InitGenesisResponse) {}
-  // BeginBlock opens a new Shieldd block at the host chain's block height.
-  rpc BeginBlock(BeginBlockRequest) returns (BeginBlockResponse) {}
-  // Deposit mints Shieldd notes for assets escrowed or burned by the host
-  // chain.
-  rpc Deposit(DepositRequest) returns (DepositResponse) {}
-  // ApplyComplianceAction applies a Bankd-authorized user/asset status transition.
-  rpc ApplyComplianceAction(ApplyComplianceActionRequest) returns (ApplyComplianceActionResponse) {}
-  // SeizeNote consumes one frozen regulated note and returns the exact host
-  // settlement that Bankd must apply atomically with this call.
-  rpc SeizeNote(SeizeNoteRequest) returns (SeizeNoteResponse) {}
-  // CheckTx validates a Shieldd transaction supplied by the host chain without
-  // applying state changes.
-  rpc CheckTx(CheckTxRequest) returns (CheckTxResponse) {}
-  // DeliverTx applies a Shieldd transaction supplied by the host chain.
-  rpc DeliverTx(DeliverTxRequest) returns (DeliverTxResponse) {}
-  // EndBlock finalizes the active Shieldd block.
-  rpc EndBlock(EndBlockRequest) returns (EndBlockResponse) {}
-  // Commit persists the pending Shieldd state and returns the committed root.
-  rpc Commit(CommitRequest) returns (CommitResponse) {}
-  // GetCommittedState returns the latest state durably committed by Shieldd.
-  rpc GetCommittedState(GetCommittedStateRequest) returns (GetCommittedStateResponse) {}
-  // Rollback discards uncommitted Shieldd state for the current execution phase.
-  rpc Rollback(RollbackRequest) returns (RollbackResponse) {}
-  // ExportGenesis exports the currently committed Shieldd state as genesis.
-  rpc ExportGenesis(ExportGenesisRequest) returns (ExportGenesisResponse) {}
-  // ArchivedNullifierProof returns a retired-generation witness for an old note.
-  rpc ArchivedNullifierProof(ArchivedNullifierProofRequest)
-      returns (ArchivedNullifierProofResponse) {}
-  // NullifierWindow returns the committed nullifier-generation planning window.
-  rpc NullifierWindow(NullifierWindowRequest) returns (NullifierWindowResponse) {}
-  // AppParameters returns the committed Shieldd application parameters.
-  rpc AppParameters(AppParametersRequest) returns (AppParametersResponse) {}
-  // AssetMetadataById returns metadata for one Shieldd asset identifier.
-  rpc AssetMetadataById(AssetMetadataByIdRequest) returns (AssetMetadataByIdResponse) {}
-  // ComplianceAssetStatus returns the registered policy for one Shieldd asset.
-  rpc ComplianceAssetStatus(ComplianceAssetStatusRequest)
-      returns (ComplianceAssetStatusResponse) {}
-  // ComplianceBatchMerkleProofs returns the compliance witnesses needed by transaction planning.
-  rpc ComplianceBatchMerkleProofs(ComplianceBatchMerkleProofsRequest)
-      returns (ComplianceBatchMerkleProofsResponse) {}
-  // ComplianceUserLeaf returns one registered user-asset compliance leaf.
-  rpc ComplianceUserLeaf(ComplianceUserLeafRequest) returns (ComplianceUserLeafResponse) {}
-  // KeyValue returns committed verifiable Shieldd state.
-  rpc KeyValue(KeyValueRequest) returns (KeyValueResponse) {}
-  // CompactBlockRange streams a bounded committed compact-block range.
-  rpc CompactBlockRange(CompactBlockRangeRequest)
-      returns (stream CompactBlockRangeResponse) {}
-}
+// Protobuf payloads for Bankd's in-process Shieldd C ABI.
+// Method IDs and query payload types are defined in crates/bin/shieldd/include/shieldd.h.
 
 // ArchivedNullifierProofRequest carries the component query across the host-chain boundary.
 message ArchivedNullifierProofRequest {
@@ -76,70 +22,6 @@ message ArchivedNullifierProofRequest {
 // ArchivedNullifierProofResponse carries the component result across the host-chain boundary.
 message ArchivedNullifierProofResponse {
   shieldd.core.component.sct.v1.ArchivedNullifierProofResponse response = 1;
-}
-
-message NullifierWindowRequest {
-  shieldd.core.component.sct.v1.NullifierWindowRequest request = 1;
-}
-
-message NullifierWindowResponse {
-  shieldd.core.component.sct.v1.NullifierWindowResponse response = 1;
-}
-
-message AppParametersRequest {
-  shieldd.core.app.v1.AppParametersRequest request = 1;
-}
-
-message AppParametersResponse {
-  shieldd.core.app.v1.AppParametersResponse response = 1;
-}
-
-message AssetMetadataByIdRequest {
-  shieldd.core.component.shielded_pool.v1.AssetMetadataByIdRequest request = 1;
-}
-
-message AssetMetadataByIdResponse {
-  shieldd.core.component.shielded_pool.v1.AssetMetadataByIdResponse response = 1;
-}
-
-message ComplianceAssetStatusRequest {
-  shieldd.core.component.compliance.v1.ComplianceAssetStatusRequest request = 1;
-}
-
-message ComplianceAssetStatusResponse {
-  shieldd.core.component.compliance.v1.ComplianceAssetStatusResponse response = 1;
-}
-
-message ComplianceBatchMerkleProofsRequest {
-  shieldd.core.component.compliance.v1.ComplianceBatchMerkleProofsRequest request = 1;
-}
-
-message ComplianceBatchMerkleProofsResponse {
-  shieldd.core.component.compliance.v1.ComplianceBatchMerkleProofsResponse response = 1;
-}
-
-message ComplianceUserLeafRequest {
-  shieldd.core.component.compliance.v1.ComplianceUserLeafRequest request = 1;
-}
-
-message ComplianceUserLeafResponse {
-  shieldd.core.component.compliance.v1.ComplianceUserLeafResponse response = 1;
-}
-
-message KeyValueRequest {
-  shieldd.cnidarium.v1.KeyValueRequest request = 1;
-}
-
-message KeyValueResponse {
-  shieldd.cnidarium.v1.KeyValueResponse response = 1;
-}
-
-message CompactBlockRangeRequest {
-  shieldd.core.component.compact_block.v1.CompactBlockRangeRequest request = 1;
-}
-
-message CompactBlockRangeResponse {
-  shieldd.core.component.compact_block.v1.CompactBlockRangeResponse response = 1;
 }
 
 // InitGenesisRequest carries the Shieldd genesis payload controlled by the host

@@ -1,10 +1,12 @@
 # Embedded artifacts
 
 Bankd links the `shieldd` static library through `crates/bin/shieldd/include/shieldd.h`.
-Execution methods and protobuf messages are shared contracts. Bankd serves public
-queries and executes IBC; Shieldd reads committed snapshots directly. Host
-withdrawals use the shared `shielded_withdrawal` proof family and return value
-to Bankd for transfer or execution.
+Bankd invokes Shieldd only through CGO; the library opens no network listener.
+The C header defines method IDs and protobuf payload types. Execution payloads
+live in `shieldd.execution_client.v1`; read-only queries use component messages
+directly. Bankd serves public queries and executes IBC; Shieldd reads committed
+snapshots. Host withdrawals use the shared `shielded_withdrawal` proof family
+and return value to Bankd for transfer or execution.
 
 Build explicit deliverables from the Shieldd source root:
 
