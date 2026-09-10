@@ -72,13 +72,11 @@ sha2                             = { workspace = true }
 tempfile                         = { workspace = true }
 tendermint                       = { workspace = true }
 tokio                            = { workspace = true, features = ["full", "tracing"] }
-tower                            = { workspace = true, features = ["full"] }
 tracing                          = { workspace = true }
 
 [dev-dependencies]
 shieldd-sdk-compliance           = { workspace = true, features = ["test-helpers"] }
 shieldd-sdk-mock-client         = { workspace = true }
-shieldd-sdk-proto               = { workspace = true, features = ["box-grpc"] }
 shieldd-sdk-shielded-pool       = { workspace = true, default-features = false, features = ["benchmark-helpers"] }
 proptest                         = { workspace = true }
 rand                             = { workspace = true }

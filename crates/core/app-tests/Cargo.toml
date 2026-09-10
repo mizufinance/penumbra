@@ -47,7 +47,6 @@ tracing                          = { workspace = true }
 [dev-dependencies]
 camino                           = { workspace = true }
 shieldd-sdk-mock-client             = { workspace = true }
-shieldd-sdk-proto                   = { workspace = true, features = ["box-grpc"] }
 shieldd-sdk-test-subscriber         = { workspace = true }
 shieldd-sdk-view                    = { workspace = true }
 rand_core                        = { workspace = true }

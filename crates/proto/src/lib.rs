@@ -14,9 +14,6 @@ pub use prost::{Message, Name};
 /// Helper methods used for shaping the JSON (and other Serde) formats derived from the protos.
 pub mod serializers;
 
-#[cfg(feature = "box-grpc")]
-pub mod box_grpc_svc;
-
 /// Helper trait for using Protobuf messages as ABCI events.
 pub mod event;
 mod protobuf;
