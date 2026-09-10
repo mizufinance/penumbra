@@ -745,7 +745,7 @@ fn transcript_family_domain(family_id: ProofFamilyId) -> Vec<u8> {
         ProofFamilyId::NoteReshape(family_id) => {
             format!("shieldd.snarkpack.{}", family_id.label()).into_bytes()
         }
-        ProofFamilyId::ShieldedIcs20Withdrawal(family_id) => {
+        ProofFamilyId::ShieldedWithdrawal(family_id) => {
             format!("shieldd.snarkpack.{}", family_id.label()).into_bytes()
         }
     }
@@ -1132,7 +1132,7 @@ mod tests {
         aggregate_family, decode_wrapped_aggregate_proof, encode_wrapped_aggregate_proof,
         verify_family_aggregate, AGGREGATE_PROTOCOL_VERSION,
     };
-    use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId};
+    use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedWithdrawalFamilyId};
 
     #[test]
     fn decoder_oracle_rejects_shape_and_canonical_aliases() {
@@ -1282,8 +1282,8 @@ mod tests {
                 .into_iter()
                 .map(ProofFamilyId::NoteReshape),
         );
-        families.push(ProofFamilyId::ShieldedIcs20Withdrawal(
-            ShieldedIcs20WithdrawalFamilyId::Canonical,
+        families.push(ProofFamilyId::ShieldedWithdrawal(
+            ShieldedWithdrawalFamilyId::Canonical,
         ));
         families
     }

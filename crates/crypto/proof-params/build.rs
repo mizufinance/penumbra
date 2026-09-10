@@ -12,7 +12,7 @@ mod gnark_artifact_validation;
 
 include!("src/gen/gnark/transfer_families_build.rs");
 include!("src/gen/gnark/note_reshape_families_build.rs");
-include!("src/gen/gnark/shielded_ics20_withdrawal_families_build.rs");
+include!("src/gen/gnark/shielded_withdrawal_families_build.rs");
 
 fn main() {
     emit_family_rerun_hints().expect("emit proof-family rerun-if-changed hints");
@@ -61,7 +61,7 @@ fn generated_deployed_family_roster() -> Vec<gnark_artifact_validation::Deployed
     let mut roster = Vec::with_capacity(
         GENERATED_TRANSFER_FAMILIES.len()
             + GENERATED_NOTE_RESHAPE_FAMILIES.len()
-            + GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES.len()
+            + GENERATED_SHIELDED_WITHDRAWAL_FAMILIES.len()
             + 1,
     );
     roster.extend(
@@ -107,10 +107,10 @@ fn generated_deployed_family_roster() -> Vec<gnark_artifact_validation::Deployed
         });
     }
     roster.extend(
-        GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES
+        GENERATED_SHIELDED_WITHDRAWAL_FAMILIES
             .iter()
             .map(|family| DeployedFamily {
-                kind: FamilyKind::ShieldedIcs20Withdrawal,
+                kind: FamilyKind::ShieldedWithdrawal,
                 id: Some(family.id),
                 label: family.label,
                 artifact_name: family.artifact_name,
@@ -174,7 +174,7 @@ fn emit_rerun_hints_recursive(path: &Path) -> anyhow::Result<()> {
 
 fn emit_family_rerun_hints() -> anyhow::Result<()> {
     let root = repo_root()?;
-    for family in ["transfer", "note_reshape", "shielded_ics20_withdrawal"] {
+    for family in ["transfer", "note_reshape", "shielded_withdrawal"] {
         for relative in [
             format!("tools/gnark/{family}_families.json"),
             format!("crates/crypto/proof-params/src/gen/gnark/{family}_families_build.rs"),
@@ -229,9 +229,9 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
     ));
     let note_reshape_lib_path =
         gnark_out_dir.join(format!("libshieldd_gnark_note_reshape.{lib_ext}"));
-    let shielded_ics20_withdrawal_lib_path = gnark_out_dir.join(format!(
+    let shielded_withdrawal_lib_path = gnark_out_dir.join(format!(
         "{}.{lib_ext}",
-        GENERATED_SHIELDED_ICS20_WITHDRAWAL_FAMILIES[0].bundled_lib_basename
+        GENERATED_SHIELDED_WITHDRAWAL_FAMILIES[0].bundled_lib_basename
     ));
 
     build_gnark_library(
@@ -252,20 +252,20 @@ fn write_bundled_gnark_runtime_paths() -> anyhow::Result<()> {
     .context("build bundled gnark note reshape library")?;
     build_gnark_library(
         &gnark_dir,
-        "./cmd/shieldedics20withdrawallib",
-        &shielded_ics20_withdrawal_lib_path,
+        "./cmd/shieldedwithdrawallib",
+        &shielded_withdrawal_lib_path,
         goos,
         goarch,
     )
-    .context("build bundled gnark shielded ICS-20 withdrawal library")?;
+    .context("build bundled gnark shielded withdrawal library")?;
 
     let include_body = format!(
         "pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
          pub const GNARK_NOTE_RESHAPE_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n\
-         pub const GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n",
+         pub const GNARK_SHIELDED_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = Some(r#\"{}\"#);\n",
         transfer_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
         note_reshape_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
-        shielded_ics20_withdrawal_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
+        shielded_withdrawal_lib_path.file_name().context("gnark library filename")?.to_string_lossy(),
     );
     std::fs::write(&include_path, include_body).context("write gnark runtime include file")?;
 
@@ -276,7 +276,7 @@ fn write_empty_gnark_runtime_include(include_path: &Path) -> anyhow::Result<()> 
     let include_body = String::from(
         "pub const GNARK_TRANSFER_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
          pub const GNARK_NOTE_RESHAPE_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n\
-         pub const GNARK_SHIELDED_ICS20_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n",
+         pub const GNARK_SHIELDED_WITHDRAWAL_BUNDLED_LIBRARY_PATH: Option<&str> = None;\n",
     );
     std::fs::write(include_path, include_body)?;
     Ok(())

@@ -9,7 +9,7 @@ use tracing::{debug, info, instrument, warn};
 
 use super::screener::{ComplianceScreener, ScreeningResult};
 use super::storage::ScannerStore;
-use super::sync::{extract_clear_flows, extract_compliance_ciphertexts};
+use super::sync::extract_compliance_ciphertexts;
 use super::types::{
     BlockRef, CandidateEvidence, OutputOutcome, ScannedBlock, ScannedOutput, TxRef,
 };
@@ -301,9 +301,6 @@ impl IssuerComplianceWorker {
                     outcome,
                 });
             }
-            for clear_flow in extract_clear_flows(&tx_ref, tx) {
-                scanned.clear_flows.push(clear_flow);
-            }
         }
 
         self.storage.commit_scanned_block(&scanned).await?;
@@ -563,7 +560,6 @@ mod tests {
                         evidence: candidate,
                     },
                 }],
-                clear_flows: vec![],
             })
             .await
             .unwrap();

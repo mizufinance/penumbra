@@ -7,9 +7,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::types::{
-    BlockRef, OutputRef, DECRYPTED_VIA_PUBLIC, FLOW_TYPE_PRIVATE_TRANSFER, FLOW_TYPE_WITHDRAW,
-};
+use super::types::{BlockRef, OutputRef, FLOW_TYPE_PRIVATE_TRANSFER, FLOW_TYPE_WITHDRAW};
 use super::types::{CandidateEvidence, OutputOutcome, ScannedBlock};
 use crate::audit_status::{AuditStatus, ScreenStatus};
 
@@ -192,22 +190,6 @@ impl SqliteScannerStore {
                 height INTEGER PRIMARY KEY,
                 block_hash BLOB NOT NULL,
                 skipped_count INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS scanner_clear_flows (
-                height INTEGER NOT NULL,
-                block_hash BLOB NOT NULL,
-                tx_index INTEGER NOT NULL,
-                tx_hash BLOB NOT NULL,
-                action_index INTEGER NOT NULL,
-                output_index INTEGER NOT NULL,
-                flow_type TEXT NOT NULL,
-                asset_id TEXT NOT NULL,
-                amount TEXT NOT NULL,
-                self_address TEXT,
-                counterparty TEXT,
-                public_address TEXT,
-                PRIMARY KEY(height, tx_hash, action_index, output_index)
             );
 
             CREATE TABLE IF NOT EXISTS audit_rows (
@@ -567,21 +549,7 @@ impl ScannerStore for SqliteScannerStore {
                 );
             }
         }
-        for flow in &scanned.clear_flows {
-            anyhow::ensure!(
-                &flow.output_ref.action.tx.block == block,
-                "clear flow block mismatch"
-            );
-            let output_ref = &flow.output_ref;
-            anyhow::ensure!(
-                identities.insert((
-                    output_ref.action.tx.tx_hash,
-                    output_ref.action.action_index,
-                    output_ref.output_index
-                )),
-                "duplicate scanner output"
-            );
-        }
+
         let conn = self.lock_conn()?;
         let tx = conn.unchecked_transaction()?;
         let existing = tx.query_row(
@@ -748,55 +716,6 @@ impl ScannerStore for SqliteScannerStore {
             }
         }
 
-        for event in &scanned.clear_flows {
-            let output_ref = &event.output_ref;
-            let tx_ref = &output_ref.action.tx;
-            let amount = event.amount.to_string();
-            tx.execute(
-                "INSERT OR IGNORE INTO scanner_clear_flows
-                 (height, block_hash, tx_index, tx_hash, action_index, output_index,
-                  flow_type, asset_id, amount, self_address, counterparty, public_address)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                params![
-                    tx_ref.block.height as i64,
-                    tx_ref.block.block_hash.as_slice(),
-                    tx_ref.tx_index as i64,
-                    tx_ref.tx_hash.as_ref(),
-                    output_ref.action.action_index as i64,
-                    output_ref.output_index as i64,
-                    event.kind.as_str(),
-                    event.asset_id.to_string(),
-                    amount.as_str(),
-                    event.self_address.as_deref(),
-                    event.counterparty.as_deref(),
-                    event.public_address.as_deref(),
-                ],
-            )?;
-            tx.execute(
-                "INSERT OR IGNORE INTO audit_rows
-                 (height, block_hash, tx_index, tx_hash, action_index, output_index,
-                  flow_type, asset_id, is_flagged, amount, self_address, counterparty_address,
-                  public_address, decrypted_via, updated_at_unix)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10, ?11, ?12, ?13, ?14)",
-                params![
-                    tx_ref.block.height as i64,
-                    tx_ref.block.block_hash.as_slice(),
-                    tx_ref.tx_index as i64,
-                    tx_ref.tx_hash.as_ref(),
-                    output_ref.action.action_index as i64,
-                    output_ref.output_index as i64,
-                    event.kind.as_str(),
-                    event.asset_id.to_string(),
-                    amount.as_str(),
-                    event.self_address.as_deref(),
-                    event.counterparty.as_deref(),
-                    event.public_address.as_deref(),
-                    DECRYPTED_VIA_PUBLIC,
-                    block.block_time_unix,
-                ],
-            )?;
-        }
-
         if invalid_count > MAX_INVALID_CIPHERTEXTS_PER_BLOCK {
             tx.execute(
                 "INSERT OR REPLACE INTO scanner_invalid_ciphertext_summaries
@@ -845,10 +764,6 @@ impl ScannerStore for SqliteScannerStore {
         )?;
         tx.execute(
             "DELETE FROM audit_rows WHERE height > ?1",
-            params![height as i64],
-        )?;
-        tx.execute(
-            "DELETE FROM scanner_clear_flows WHERE height > ?1",
             params![height as i64],
         )?;
         tx.execute(
@@ -988,14 +903,13 @@ fn to_sql_error(error: anyhow::Error) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::{ActionRef, ClearFlowKind, OutputRef, TxRef};
+    use crate::scanner::{ActionRef, OutputRef, TxRef};
     use shieldd_sdk_asset::asset;
     use shieldd_sdk_txhash::TransactionId;
     use tempfile::NamedTempFile;
 
     use super::super::types::{
-        ClearFlowEvent, DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext,
-        ScannedOutput,
+        DetectionEvent, ExtractedComplianceCiphertext, InvalidCiphertext, ScannedOutput,
     };
 
     fn detected_output(event: DetectionEvent) -> ScannedOutput {
@@ -1474,71 +1388,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let clear_flows: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM scanner_clear_flows WHERE height = 42",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
         assert_eq!(ciphertexts, 0);
-        assert_eq!(clear_flows, 0);
-    }
-
-    fn clear_flow(height: u64, kind: ClearFlowKind, output_index: u32) -> ClearFlowEvent {
-        ClearFlowEvent {
-            output_ref: output_ref(height, 1, 2, output_index),
-            kind,
-            asset_id: asset::Id(decaf377::Fq::from(7u64)),
-            amount: shieldd_sdk_num::Amount::from(100u64),
-            self_address: Some("shieldd1self".to_string()),
-            counterparty: Some("shieldd1counter".to_string()),
-            public_address: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn sqlite_store_projects_clear_shield_and_withdraw_to_audit_rows() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let store = SqliteScannerStore::new(temp_file.path()).unwrap();
-        let block = block(50);
-        let mut scanned = ScannedBlock::new(block.clone());
-        scanned
-            .clear_flows
-            .push(clear_flow(50, ClearFlowKind::Shield, 1));
-        scanned
-            .clear_flows
-            .push(clear_flow(50, ClearFlowKind::Withdraw, 2));
-        store.commit_scanned_block(&scanned).await.unwrap();
-
-        let conn = store.lock_conn().unwrap();
-        let flow_rows: Vec<(String, String)> = conn
-            .prepare(
-                "SELECT flow_type, asset_id FROM scanner_clear_flows WHERE height = 50 ORDER BY output_index",
-            )
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(flow_rows.len(), 2);
-        assert_eq!(flow_rows[0].0, "shield");
-        assert_eq!(flow_rows[1].0, "withdraw");
-
-        let audit_rows: Vec<(String, Option<String>)> = conn
-            .prepare(
-                "SELECT flow_type, decrypted_via FROM audit_rows WHERE height = 50 ORDER BY output_index",
-            )
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(audit_rows.len(), 2);
-        assert_eq!(audit_rows[0].0, "shield");
-        assert_eq!(audit_rows[1].0, "withdraw");
-        assert_eq!(audit_rows[0].1.as_deref(), Some(DECRYPTED_VIA_PUBLIC));
-        assert_eq!(audit_rows[1].1.as_deref(), Some(DECRYPTED_VIA_PUBLIC));
     }
 
     #[tokio::test]

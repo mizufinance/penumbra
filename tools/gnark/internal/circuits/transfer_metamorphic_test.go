@@ -583,39 +583,39 @@ func TestTransferCircuitBindsUnregulatedCiphertextAndCanonicalPolicy(t *testing.
 	}
 }
 
-func TestShieldedIcs20WithdrawalCircuitRejectsRegulatedAssetRoutedAsUnregulated(t *testing.T) {
-	fixtureBytes := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
-	witness, family, err := abi.DecodeShieldedIcs20WithdrawalWitness(fixtureBytes)
+func TestShieldedWithdrawalCircuitRejectsRegulatedAssetRoutedAsUnregulated(t *testing.T) {
+	fixtureBytes := testfixtures.LoadShieldedWithdrawalWitness("shielded_withdrawal")
+	witness, family, err := abi.DecodeShieldedWithdrawalWitness(fixtureBytes)
 	if err != nil {
-		t.Fatalf("decode shielded ICS-20 withdrawal fixture: %v", err)
+		t.Fatalf("decode shielded withdrawal fixture: %v", err)
 	}
 	if !witness.IsRegulated {
-		t.Fatalf("shielded ICS-20 withdrawal fixture must start regulated for this regression")
+		t.Fatalf("shielded withdrawal fixture must start regulated for this regression")
 	}
-	assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(fixtureBytes)
+	assignment, _, err := abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(fixtureBytes)
 	if err != nil {
-		t.Fatalf("build shielded ICS-20 withdrawal assignment: %v", err)
+		t.Fatalf("build shielded withdrawal assignment: %v", err)
 	}
 	assignment.IsRegulated = 0
 
 	if err := test.IsSolved(
-		circuits.NewShieldedIcs20WithdrawalCircuit(family.NIn),
+		circuits.NewShieldedWithdrawalCircuit(family.NIn),
 		assignment,
 		ecc.BLS12_377.ScalarField(),
 	); err == nil {
-		t.Fatalf("expected shielded ICS-20 withdrawal circuit to reject regulated asset routed through unregulated branch")
+		t.Fatalf("expected shielded withdrawal circuit to reject regulated asset routed through unregulated branch")
 	}
 }
 
 func withdrawalDummyNullifierForSlot(
 	t *testing.T,
-	spend abi.ShieldedIcs20WithdrawalOptionalSpendWitnessBinary,
+	spend abi.ShieldedWithdrawalOptionalSpendWitnessBinary,
 	slot int,
 ) *big.Int {
 	t.Helper()
 
 	domainBytes := blake2b.Sum512(
-		[]byte("shieldd.shielded_ics20_withdrawal.synthetic_dummy.nullifier"),
+		[]byte("shieldd.shielded_withdrawal.synthetic_dummy.nullifier"),
 	)
 	nullifier, err := primitives.Poseidon377Hash3Native(
 		primitives.LittleEndianBytesToBigInt(domainBytes[:]),
@@ -633,8 +633,8 @@ func withdrawalDummyNullifierForSlot(
 
 func makeWithdrawalOptionalSpendDummy(
 	t *testing.T,
-	witness *abi.ShieldedIcs20WithdrawalWitnessBinary,
-	assignment *circuits.ShieldedIcs20WithdrawalCircuit,
+	witness *abi.ShieldedWithdrawalWitnessBinary,
+	assignment *circuits.ShieldedWithdrawalCircuit,
 ) {
 	t.Helper()
 
@@ -780,17 +780,17 @@ func TestTransferDummySpendRKIsExternallyAuthorized(t *testing.T) {
 
 func setWithdrawalStatementHash(
 	t *testing.T,
-	witness *abi.ShieldedIcs20WithdrawalWitnessBinary,
-	assignment *circuits.ShieldedIcs20WithdrawalCircuit,
+	witness *abi.ShieldedWithdrawalWitnessBinary,
+	assignment *circuits.ShieldedWithdrawalCircuit,
 	nIn int,
 ) {
 	t.Helper()
 
-	fields, err := abi.ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness(witness)
+	fields, err := abi.ReconstructedShieldedWithdrawalStatementFieldsFromWitness(witness)
 	if err != nil {
 		t.Fatalf("reconstruct withdrawal statement fields: %v", err)
 	}
-	statementHash, err := primitives.ShieldedIcs20WithdrawalStatementHashNativeForShape(
+	statementHash, err := primitives.ShieldedWithdrawalStatementHashNativeForShape(
 		fieldElementStrings(fields),
 		nIn,
 	)
@@ -802,8 +802,8 @@ func setWithdrawalStatementHash(
 
 func balanceWithdrawalAfterOptionalDummy(
 	t *testing.T,
-	witness *abi.ShieldedIcs20WithdrawalWitnessBinary,
-	assignment *circuits.ShieldedIcs20WithdrawalCircuit,
+	witness *abi.ShieldedWithdrawalWitnessBinary,
+	assignment *circuits.ShieldedWithdrawalCircuit,
 ) {
 	t.Helper()
 
@@ -828,24 +828,24 @@ func balanceWithdrawalAfterOptionalDummy(
 func loadWithdrawalFixture(
 	t *testing.T,
 ) (
-	*abi.ShieldedIcs20WithdrawalWitnessBinary,
-	*circuits.ShieldedIcs20WithdrawalCircuit,
+	*abi.ShieldedWithdrawalWitnessBinary,
+	*circuits.ShieldedWithdrawalCircuit,
 	int,
 ) {
 	t.Helper()
 
-	fixtureBytes := testfixtures.LoadShieldedIcs20WithdrawalWitness(
-		"shielded_ics20_withdrawal",
+	fixtureBytes := testfixtures.LoadShieldedWithdrawalWitness(
+		"shielded_withdrawal",
 	)
-	witness, family, err := abi.DecodeShieldedIcs20WithdrawalWitness(fixtureBytes)
+	witness, family, err := abi.DecodeShieldedWithdrawalWitness(fixtureBytes)
 	if err != nil {
-		t.Fatalf("decode shielded ICS-20 withdrawal fixture: %v", err)
+		t.Fatalf("decode shielded withdrawal fixture: %v", err)
 	}
-	assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(
+	assignment, _, err := abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(
 		fixtureBytes,
 	)
 	if err != nil {
-		t.Fatalf("build shielded ICS-20 withdrawal assignment: %v", err)
+		t.Fatalf("build shielded withdrawal assignment: %v", err)
 	}
 	if witness.OptionalSpend.IsDummy {
 		t.Fatal("canonical withdrawal mutation fixture must start with a real optional input")
@@ -853,7 +853,7 @@ func loadWithdrawalFixture(
 	return witness, assignment, family.NIn
 }
 
-func TestShieldedIcs20WithdrawalAcceptsExternalPaddedRK(t *testing.T) {
+func TestShieldedWithdrawalAcceptsExternalPaddedRK(t *testing.T) {
 	witness, assignment, nIn := loadWithdrawalFixture(t)
 
 	makeWithdrawalOptionalSpendDummy(t, witness, assignment)
@@ -870,7 +870,7 @@ func TestShieldedIcs20WithdrawalAcceptsExternalPaddedRK(t *testing.T) {
 	setWithdrawalStatementHash(t, witness, assignment, nIn)
 
 	if err := test.IsSolved(
-		circuits.NewShieldedIcs20WithdrawalCircuit(nIn),
+		circuits.NewShieldedWithdrawalCircuit(nIn),
 		assignment,
 		ecc.BLS12_377.ScalarField(),
 	); err != nil {
@@ -878,7 +878,7 @@ func TestShieldedIcs20WithdrawalAcceptsExternalPaddedRK(t *testing.T) {
 	}
 }
 
-func TestShieldedIcs20WithdrawalRejectsUnbalancedAmounts(t *testing.T) {
+func TestShieldedWithdrawalRejectsUnbalancedAmounts(t *testing.T) {
 	witness, assignment, nIn := loadWithdrawalFixture(t)
 
 	outboundAmount := primitives.LittleEndianBytesToBigInt(witness.OutboundAmount[:])
@@ -892,7 +892,7 @@ func TestShieldedIcs20WithdrawalRejectsUnbalancedAmounts(t *testing.T) {
 	setWithdrawalStatementHash(t, witness, assignment, nIn)
 
 	if err := test.IsSolved(
-		circuits.NewShieldedIcs20WithdrawalCircuit(nIn),
+		circuits.NewShieldedWithdrawalCircuit(nIn),
 		assignment,
 		ecc.BLS12_377.ScalarField(),
 	); err == nil {

@@ -16,7 +16,7 @@ const SETUP_PROVENANCE_SCHEMA: &str = "shieldd.gnark.setup_provenance";
 pub(crate) enum FamilyKind {
     Transfer,
     NoteReshape,
-    ShieldedIcs20Withdrawal,
+    ShieldedWithdrawal,
     NoteSeizure,
 }
 
@@ -93,10 +93,10 @@ pub(crate) const DEPLOYED_FAMILIES: [DeployedFamily; 5] = [
         max_real_outputs: 1,
     },
     DeployedFamily {
-        kind: FamilyKind::ShieldedIcs20Withdrawal,
+        kind: FamilyKind::ShieldedWithdrawal,
         id: Some(1),
-        label: "shielded_ics20_withdrawal",
-        artifact_name: "shielded_ics20_withdrawal",
+        label: "shielded_withdrawal",
+        artifact_name: "shielded_withdrawal",
         n_in: 2,
         n_out: 1,
         input_padding: InputPadding::Fixed,

@@ -1,0 +1,14 @@
+{
+  "schema": "shieldd.shielded_withdrawal_families",
+  "families": [
+    {
+      "id": 1,
+      "rust_name": "Canonical",
+      "label": "shielded_withdrawal",
+      "artifact_name": "shielded_withdrawal",
+      "bundled_lib_basename": "libshieldd_gnark_shielded_withdrawal",
+      "n_in": 2,
+      "n_out": 1
+    }
+  ]
+}

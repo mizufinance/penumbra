@@ -3,9 +3,6 @@
 #[cfg(feature = "component")]
 pub mod component;
 
-pub mod ics20_withdrawal;
-pub use ics20_withdrawal::Ics20Withdrawal;
-
 mod host_withdrawal;
 pub use host_withdrawal::{
     EvmCall, HostExecution, HostTransfer, HostWithdrawal, HostWithdrawalDestination,
@@ -52,7 +49,7 @@ pub mod note_reshape;
 mod note_seizure;
 pub mod public_input_hash;
 pub mod shielded_host_withdrawal;
-pub mod shielded_ics20_withdrawal;
+pub mod shielded_withdrawal;
 pub mod transfer;
 
 pub mod backref;
@@ -78,14 +75,12 @@ pub use shielded_host_withdrawal::{
     ShieldedHostWithdrawal, ShieldedHostWithdrawalBody, ShieldedHostWithdrawalPlan,
     ShieldedHostWithdrawalView,
 };
-pub use shielded_ics20_withdrawal::{
-    ShieldedIcs20Withdrawal, ShieldedIcs20WithdrawalBody, ShieldedIcs20WithdrawalChangeBody,
-    ShieldedIcs20WithdrawalChangePrivate, ShieldedIcs20WithdrawalChangePublic,
-    ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalFamilySpec,
-    ShieldedIcs20WithdrawalInputPublic, ShieldedIcs20WithdrawalOptionalInputPrivate,
-    ShieldedIcs20WithdrawalPlan, ShieldedIcs20WithdrawalProof, ShieldedIcs20WithdrawalProofPrivate,
-    ShieldedIcs20WithdrawalProofPublic, ShieldedIcs20WithdrawalRequiredInputPrivate,
-    ShieldedIcs20WithdrawalView, SHIELDED_ICS20_WITHDRAWAL_FAMILY_SPECS,
+pub use shielded_withdrawal::{
+    ShieldedWithdrawalChangeBody, ShieldedWithdrawalChangePrivate, ShieldedWithdrawalChangePublic,
+    ShieldedWithdrawalFamilyId, ShieldedWithdrawalFamilySpec, ShieldedWithdrawalInputPublic,
+    ShieldedWithdrawalOptionalInputPrivate, ShieldedWithdrawalProof,
+    ShieldedWithdrawalProofPrivate, ShieldedWithdrawalProofPublic,
+    ShieldedWithdrawalRequiredInputPrivate, SHIELDED_WITHDRAWAL_FAMILY_SPECS,
 };
 pub use transfer::{
     transfer_auth_sig_count, transfer_input_count, transfer_output_count, Transfer, TransferBody,

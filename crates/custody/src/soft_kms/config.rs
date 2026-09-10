@@ -54,7 +54,6 @@ mod tests {
         let pvk = pak.verification_key();
 
         let auth_policy = vec![
-            AuthPolicy::OnlyIbcRelay,
             AuthPolicy::DestinationAllowList {
                 allowed_destination_addresses: vec![spend_key
                     .incoming_viewing_key()

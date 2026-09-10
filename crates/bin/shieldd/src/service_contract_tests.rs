@@ -200,7 +200,7 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
     let mut delta = StateDelta::new(storage.latest_snapshot());
     delta.put_raw("query-proof-present".into(), b"main-store value".to_vec());
     delta.put_raw(
-        "ibc-data/query-proof-present".into(),
+        "cometbft-data/query-proof-present".into(),
         b"committed value".to_vec(),
     );
     storage.commit(delta).await?;
@@ -212,13 +212,13 @@ async fn key_value_proves_membership_and_absence_at_committed_root() -> Result<(
         ("query-proof-present", vec!["query-proof-present"], true),
         ("query-proof-absent", vec!["query-proof-absent"], false),
         (
-            "ibc-data/query-proof-present",
-            vec!["ibc-data", "query-proof-present"],
+            "cometbft-data/query-proof-present",
+            vec!["cometbft-data", "query-proof-present"],
             true,
         ),
         (
-            "ibc-data/query-proof-absent",
-            vec!["ibc-data", "query-proof-absent"],
+            "cometbft-data/query-proof-absent",
+            vec!["cometbft-data", "query-proof-absent"],
             false,
         ),
     ] {

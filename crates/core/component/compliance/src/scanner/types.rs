@@ -49,32 +49,6 @@ pub struct ExtractedComplianceCiphertext {
     pub public_withdrawal: Option<PublicWithdrawalData>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ClearFlowKind {
-    Shield,
-    Withdraw,
-}
-
-impl ClearFlowKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Shield => FLOW_TYPE_SHIELD,
-            Self::Withdraw => FLOW_TYPE_WITHDRAW,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClearFlowEvent {
-    pub output_ref: OutputRef,
-    pub kind: ClearFlowKind,
-    pub asset_id: asset::Id,
-    pub amount: shieldd_sdk_num::Amount,
-    pub self_address: Option<String>,
-    pub counterparty: Option<String>,
-    pub public_address: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 pub struct DetectionEvent {
     pub record_ref: ComplianceRecordRef,
@@ -131,7 +105,6 @@ pub struct AuditLedgerRow {
 pub struct ScannedBlock {
     pub block: BlockRef,
     pub outputs: Vec<ScannedOutput>,
-    pub clear_flows: Vec<ClearFlowEvent>,
 }
 
 impl ScannedBlock {
@@ -139,7 +112,6 @@ impl ScannedBlock {
         Self {
             block,
             outputs: Vec::new(),
-            clear_flows: Vec::new(),
         }
     }
 }

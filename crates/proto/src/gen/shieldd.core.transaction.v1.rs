@@ -138,7 +138,7 @@ pub struct FamilyAggregate {
     #[prost(uint32, tag = "6")]
     pub note_reshape_family_id: u32,
     #[prost(uint32, tag = "8")]
-    pub shielded_ics20_withdrawal_family_id: u32,
+    pub shielded_withdrawal_family_id: u32,
 }
 impl ::prost::Name for FamilyAggregate {
     const NAME: &'static str = "FamilyAggregate";
@@ -172,7 +172,7 @@ impl ::prost::Name for AggregateBundle {
 /// A state change performed by a transaction.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Action {
-    #[prost(oneof = "action::Action", tags = "5, 6, 17, 80, 81, 82, 200, 201")]
+    #[prost(oneof = "action::Action", tags = "5, 6, 80, 81, 82, 201")]
     pub action: ::core::option::Option<action::Action>,
 }
 /// Nested message and enum types in `Action`.
@@ -183,8 +183,6 @@ pub mod action {
         Transfer(super::super::super::component::shielded_pool::v1::Transfer),
         #[prost(message, tag = "6")]
         NoteReshape(super::super::super::component::shielded_pool::v1::NoteReshape),
-        #[prost(message, tag = "17")]
-        IbcRelayAction(super::super::super::component::ibc::v1::IbcRelay),
         /// Compliance
         #[prost(message, tag = "80")]
         ComplianceRegisterAsset(
@@ -196,10 +194,6 @@ pub mod action {
         ),
         #[prost(message, tag = "82")]
         AggregateBundle(super::AggregateBundle),
-        #[prost(message, tag = "200")]
-        ShieldedIcs20Withdrawal(
-            super::super::super::component::shielded_pool::v1::ShieldedIcs20Withdrawal,
-        ),
         #[prost(message, tag = "201")]
         ShieldedHostWithdrawal(
             super::super::super::component::shielded_pool::v1::ShieldedHostWithdrawal,
@@ -449,7 +443,7 @@ impl ::prost::Name for TransactionBodyView {
 /// A view of a specific state change action performed by a transaction.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionView {
-    #[prost(oneof = "action_view::ActionView", tags = "5, 6, 17, 80, 81, 82, 200, 201")]
+    #[prost(oneof = "action_view::ActionView", tags = "5, 6, 80, 81, 82, 201")]
     pub action_view: ::core::option::Option<action_view::ActionView>,
 }
 /// Nested message and enum types in `ActionView`.
@@ -460,9 +454,6 @@ pub mod action_view {
         Transfer(super::super::super::component::shielded_pool::v1::TransferView),
         #[prost(message, tag = "6")]
         NoteReshape(super::super::super::component::shielded_pool::v1::NoteReshapeView),
-        /// Action types without visible/opaque variants
-        #[prost(message, tag = "17")]
-        IbcRelayAction(super::super::super::component::ibc::v1::IbcRelay),
         /// Compliance
         #[prost(message, tag = "80")]
         ComplianceRegisterAsset(
@@ -474,10 +465,6 @@ pub mod action_view {
         ),
         #[prost(message, tag = "82")]
         AggregateBundle(super::AggregateBundle),
-        #[prost(message, tag = "200")]
-        ShieldedIcs20Withdrawal(
-            super::super::super::component::shielded_pool::v1::ShieldedIcs20WithdrawalView,
-        ),
         #[prost(message, tag = "201")]
         ShieldedHostWithdrawal(
             super::super::super::component::shielded_pool::v1::ShieldedHostWithdrawalView,
@@ -622,7 +609,7 @@ impl ::prost::Name for FeeFundingPlan {
 /// themselves.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ActionPlan {
-    #[prost(oneof = "action_plan::Action", tags = "5, 6, 17, 200, 201, 80, 81")]
+    #[prost(oneof = "action_plan::Action", tags = "5, 6, 201, 80, 81")]
     pub action: ::core::option::Option<action_plan::Action>,
 }
 /// Nested message and enum types in `ActionPlan`.
@@ -633,13 +620,6 @@ pub mod action_plan {
         Transfer(super::super::super::component::shielded_pool::v1::TransferPlan),
         #[prost(message, tag = "6")]
         NoteReshape(super::super::super::component::shielded_pool::v1::NoteReshapePlan),
-        /// This is just a message relayed to the chain.
-        #[prost(message, tag = "17")]
-        IbcRelayAction(super::super::super::component::ibc::v1::IbcRelay),
-        #[prost(message, tag = "200")]
-        ShieldedIcs20Withdrawal(
-            super::super::super::component::shielded_pool::v1::ShieldedIcs20WithdrawalPlan,
-        ),
         #[prost(message, tag = "201")]
         ShieldedHostWithdrawal(
             super::super::super::component::shielded_pool::v1::ShieldedHostWithdrawalPlan,
@@ -805,7 +785,7 @@ pub enum ProofFamilyId {
     Unspecified = 0,
     Transfer = 7,
     NoteReshape = 8,
-    ShieldedIcs20Withdrawal = 10,
+    ShieldedWithdrawal = 10,
 }
 impl ProofFamilyId {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -817,7 +797,7 @@ impl ProofFamilyId {
             Self::Unspecified => "PROOF_FAMILY_ID_UNSPECIFIED",
             Self::Transfer => "PROOF_FAMILY_ID_TRANSFER",
             Self::NoteReshape => "PROOF_FAMILY_ID_NOTE_RESHAPE",
-            Self::ShieldedIcs20Withdrawal => "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL",
+            Self::ShieldedWithdrawal => "PROOF_FAMILY_ID_SHIELDED_WITHDRAWAL",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -826,9 +806,7 @@ impl ProofFamilyId {
             "PROOF_FAMILY_ID_UNSPECIFIED" => Some(Self::Unspecified),
             "PROOF_FAMILY_ID_TRANSFER" => Some(Self::Transfer),
             "PROOF_FAMILY_ID_NOTE_RESHAPE" => Some(Self::NoteReshape),
-            "PROOF_FAMILY_ID_SHIELDED_ICS20_WITHDRAWAL" => {
-                Some(Self::ShieldedIcs20Withdrawal)
-            }
+            "PROOF_FAMILY_ID_SHIELDED_WITHDRAWAL" => Some(Self::ShieldedWithdrawal),
             _ => None,
         }
     }

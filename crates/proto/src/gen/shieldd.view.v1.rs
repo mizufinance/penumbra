@@ -215,14 +215,6 @@ pub struct TransactionPlannerRequest {
     /// Request contents
     #[prost(message, repeated, tag = "20")]
     pub outputs: ::prost::alloc::vec::Vec<transaction_planner_request::TransferOutput>,
-    #[prost(message, repeated, tag = "60")]
-    pub ibc_relay_actions: ::prost::alloc::vec::Vec<
-        super::super::core::component::ibc::v1::IbcRelay,
-    >,
-    #[prost(message, repeated, tag = "61")]
-    pub ics20_withdrawals: ::prost::alloc::vec::Vec<
-        super::super::core::component::ibc::v1::Ics20Withdrawal,
-    >,
     #[prost(message, repeated, tag = "62")]
     pub host_withdrawals: ::prost::alloc::vec::Vec<
         super::super::core::component::shielded_pool::v1::HostWithdrawal,

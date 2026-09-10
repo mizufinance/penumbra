@@ -16,15 +16,6 @@ pub enum CommitmentSource {
         /// indicating to the client that they should download and inspect the block's transactions.
         id: Option<[u8; 32]>,
     },
-    /// The commitment was created by an inbound ICS20 transfer.
-    Ics20Transfer {
-        /// The sequence number of the transfer packet.
-        packet_seq: u64,
-        /// The channel the packet was sent on.
-        channel_id: String,
-        /// The sender address on the counterparty chain.
-        sender: String,
-    },
 }
 
 impl DomainType for CommitmentSource {
@@ -64,15 +55,6 @@ impl From<CommitmentSource> for pb::CommitmentSource {
                 CommitmentSource::Transaction { id } => Source::Transaction(pbcs::Transaction {
                     id: id.map(|bytes| bytes.to_vec()).unwrap_or_default(),
                 }),
-                CommitmentSource::Ics20Transfer {
-                    packet_seq,
-                    channel_id,
-                    sender,
-                } => Source::Ics20Transfer(pbcs::Ics20Transfer {
-                    packet_seq,
-                    channel_id,
-                    sender,
-                }),
             }),
         }
     }
@@ -98,11 +80,6 @@ impl TryFrom<pb::CommitmentSource> for CommitmentSource {
                     }
                 }
             }
-            Source::Ics20Transfer(x) => Self::Ics20Transfer {
-                packet_seq: x.packet_seq,
-                channel_id: x.channel_id,
-                sender: x.sender,
-            },
         })
     }
 }

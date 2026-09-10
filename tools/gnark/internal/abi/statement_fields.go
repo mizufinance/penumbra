@@ -421,16 +421,16 @@ func ReconstructedNoteReshapeStatementFieldsFromWitness(
 	return fields, nil
 }
 
-func shieldedIcs20WithdrawalBalanceCommitmentField(
-	witness *ShieldedIcs20WithdrawalWitnessBinary,
+func shieldedWithdrawalBalanceCommitmentField(
+	witness *ShieldedWithdrawalWitnessBinary,
 ) ([32]byte, error) {
 	valueBlindingGenerator, err := circuits.ValueBlindingGeneratorNative()
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("load shielded ICS-20 withdrawal value blinding generator: %w", err)
+		return [32]byte{}, fmt.Errorf("load shielded withdrawal value blinding generator: %w", err)
 	}
 	vectors, err := primitives.LoadPrototypeVectors()
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("load shielded ICS-20 withdrawal prototype vectors: %w", err)
+		return [32]byte{}, fmt.Errorf("load shielded withdrawal prototype vectors: %w", err)
 	}
 	point, err := decafgnark.ScalarMulNative(
 		valueBlindingGenerator,
@@ -438,23 +438,23 @@ func shieldedIcs20WithdrawalBalanceCommitmentField(
 		primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order).BitLen(),
 	)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("compute shielded ICS-20 withdrawal blinding-only balance commitment: %w", err)
+		return [32]byte{}, fmt.Errorf("compute shielded withdrawal blinding-only balance commitment: %w", err)
 	}
 	compressed, err := decafgnark.CompressToFieldNative(point)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("compress shielded ICS-20 withdrawal balance commitment: %w", err)
+		return [32]byte{}, fmt.Errorf("compress shielded withdrawal balance commitment: %w", err)
 	}
 	return bigIntToLE32(compressed)
 }
 
-// ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness mirrors the
-// Go shielded ICS-20 withdrawal circuit's statement-field order using decoded
+// ReconstructedShieldedWithdrawalStatementFieldsFromWitness mirrors the
+// Go shielded withdrawal circuit's statement-field order using decoded
 // witness fields. Internal conservation makes the balance commitment depend
 // only on the action balance blinding.
-func ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness(
-	witness *ShieldedIcs20WithdrawalWitnessBinary,
+func ReconstructedShieldedWithdrawalStatementFieldsFromWitness(
+	witness *ShieldedWithdrawalWitnessBinary,
 ) ([][32]byte, error) {
-	expected := primitives.ShieldedIcs20WithdrawalStatementFieldCount(int(witness.NIn))
+	expected := primitives.ShieldedWithdrawalStatementFieldCount(int(witness.NIn))
 	fields := make([][32]byte, 0, expected)
 	fields = append(
 		fields,
@@ -462,20 +462,20 @@ func ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness(
 		witness.ChangeOutput.NoteCommitment,
 		witness.ChangeOutput.RecoveryCommitment,
 	)
-	balanceCommitment, err := shieldedIcs20WithdrawalBalanceCommitmentField(witness)
+	balanceCommitment, err := shieldedWithdrawalBalanceCommitmentField(witness)
 	if err != nil {
 		return nil, err
 	}
 	fields = append(fields, balanceCommitment)
 	fields = append(fields, witness.RecentPositionFloor)
-	for index, spend := range []ShieldedIcs20WithdrawalRequiredSpendWitnessBinary{
+	for index, spend := range []ShieldedWithdrawalRequiredSpendWitnessBinary{
 		witness.RequiredSpend,
-		witness.OptionalSpend.ShieldedIcs20WithdrawalRequiredSpendWitnessBinary,
+		witness.OptionalSpend.ShieldedWithdrawalRequiredSpendWitnessBinary,
 	} {
 		fields = append(fields, spend.Nullifier)
 		rk, err := pointAffineToField(spend.RKAffine)
 		if err != nil {
-			return nil, fmt.Errorf("compress shielded ICS-20 withdrawal rk_%d: %w", index, err)
+			return nil, fmt.Errorf("compress shielded withdrawal rk_%d: %w", index, err)
 		}
 		fields = append(fields, rk)
 		fields = append(fields, boolField(spend.HistoryRequired))
@@ -506,29 +506,29 @@ func ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness(
 		witness.WithdrawalKeyConfirmation,
 	)
 	fields = append(fields, witness.WithdrawalEncryptedSenderAddress[:]...)
-	if err := ensureFieldCount("shielded ICS-20 withdrawal", fields, expected); err != nil {
+	if err := ensureFieldCount("shielded withdrawal", fields, expected); err != nil {
 		return nil, err
 	}
 	return fields, nil
 }
 
-func reconstructedShieldedIcs20WithdrawalStatementHashFromWitness(
-	witness *ShieldedIcs20WithdrawalWitnessBinary,
+func reconstructedShieldedWithdrawalStatementHashFromWitness(
+	witness *ShieldedWithdrawalWitnessBinary,
 ) (*big.Int, error) {
-	fields, err := ReconstructedShieldedIcs20WithdrawalStatementFieldsFromWitness(witness)
+	fields, err := ReconstructedShieldedWithdrawalStatementFieldsFromWitness(witness)
 	if err != nil {
-		return nil, fmt.Errorf("reconstruct shielded ICS-20 withdrawal statement fields: %w", err)
+		return nil, fmt.Errorf("reconstruct shielded withdrawal statement fields: %w", err)
 	}
 	nativeFields := make([]*big.Int, len(fields))
 	for index := range fields {
 		nativeFields[index] = primitives.LittleEndianBytesToBigInt(fields[index][:])
 	}
-	hash, err := primitives.ShieldedIcs20WithdrawalStatementHashNativeForShape(
+	hash, err := primitives.ShieldedWithdrawalStatementHashNativeForShape(
 		nativeFields,
 		int(witness.NIn),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("hash reconstructed shielded ICS-20 withdrawal statement fields: %w", err)
+		return nil, fmt.Errorf("hash reconstructed shielded withdrawal statement fields: %w", err)
 	}
 	return hash, nil
 }

@@ -103,19 +103,19 @@ func testCircuitFamilies() []circuitFamily {
 			},
 		},
 		{
-			name:    "shielded_ics20_withdrawal",
-			circuit: func() frontend.Circuit { return circuits.NewShieldedIcs20WithdrawalCircuit(2) },
+			name:    "shielded_withdrawal",
+			circuit: func() frontend.Circuit { return circuits.NewShieldedWithdrawalCircuit(2) },
 			assignment: func(t *testing.T) frontend.Circuit {
 				t.Helper()
-				fixtureBytes := testfixtures.LoadShieldedIcs20WithdrawalWitness("shielded_ics20_withdrawal")
-				assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(fixtureBytes)
+				fixtureBytes := testfixtures.LoadShieldedWithdrawalWitness("shielded_withdrawal")
+				assignment, _, err := abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(fixtureBytes)
 				if err != nil {
-					t.Fatalf("decode shielded ICS-20 withdrawal witness fixture: %v", err)
+					t.Fatalf("decode shielded withdrawal witness fixture: %v", err)
 				}
 				return assignment
 			},
 			mutateStatement: func(assignment frontend.Circuit) {
-				a := assignment.(*circuits.ShieldedIcs20WithdrawalCircuit)
+				a := assignment.(*circuits.ShieldedWithdrawalCircuit)
 				a.ClaimedStatementHash = mutateFieldByOne(a.ClaimedStatementHash)
 			},
 		},
@@ -191,8 +191,8 @@ func compileCircuitFamilies() []struct {
 			stats:   circuitStats{constraints: 122896, public: 2, secret: 333, internal: 112226},
 		},
 		{
-			name:    "shielded_ics20_withdrawal",
-			circuit: func() frontend.Circuit { return circuits.NewShieldedIcs20WithdrawalCircuit(2) },
+			name:    "shielded_withdrawal",
+			circuit: func() frontend.Circuit { return circuits.NewShieldedWithdrawalCircuit(2) },
 			stats:   circuitStats{constraints: 102571, public: 2, secret: 418, internal: 94827},
 		},
 	}
@@ -235,19 +235,19 @@ func TestCircuitFamiliesAcceptValidAssignment(t *testing.T) {
 	}
 }
 
-func TestShieldedIcs20WithdrawalAccumulatorBranchesAcceptValidAssignment(t *testing.T) {
+func TestShieldedWithdrawalAccumulatorBranchesAcceptValidAssignment(t *testing.T) {
 	for _, label := range []string{
-		"shielded_ics20_withdrawal_accumulator_origin",
-		"shielded_ics20_withdrawal_accumulator_continuation",
+		"shielded_withdrawal_accumulator_origin",
+		"shielded_withdrawal_accumulator_continuation",
 	} {
 		t.Run(label, func(t *testing.T) {
-			fixture := testfixtures.LoadShieldedIcs20WithdrawalWitness(label)
-			assignment, _, err := abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(fixture)
+			fixture := testfixtures.LoadShieldedWithdrawalWitness(label)
+			assignment, _, err := abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(fixture)
 			if err != nil {
 				t.Fatalf("decode withdrawal fixture: %v", err)
 			}
 
-			checkAssignment(t, circuits.NewShieldedIcs20WithdrawalCircuit(2), test.WithValidAssignment(assignment))
+			checkAssignment(t, circuits.NewShieldedWithdrawalCircuit(2), test.WithValidAssignment(assignment))
 		})
 	}
 }
@@ -281,7 +281,7 @@ func TestCircuitFamiliesRejectMutatedComplianceField(t *testing.T) {
 					).String()
 				setTransferStatementHash(t, witness, transfer)
 				assignment = transfer
-			case "shielded_ics20_withdrawal":
+			case "shielded_withdrawal":
 				_, withdrawal, _ := loadWithdrawalFixture(t)
 				withdrawal.WithdrawalEffectHashLimbs[0] =
 					mutateFieldByOne(withdrawal.WithdrawalEffectHashLimbs[0])
@@ -338,7 +338,7 @@ func TestCircuitFamiliesRejectMutatedBalanceCommitment(t *testing.T) {
 				transfer.ActionBalanceBlinding =
 					mutateFieldByOne(transfer.ActionBalanceBlinding)
 				assignment = transfer
-			case "shielded_ics20_withdrawal":
+			case "shielded_withdrawal":
 				_, withdrawal, _ := loadWithdrawalFixture(t)
 				withdrawal.ActionBalanceBlinding =
 					mutateFieldByOne(withdrawal.ActionBalanceBlinding)
@@ -389,7 +389,7 @@ func TestCircuitFamiliesRejectMutatedNullifier(t *testing.T) {
 					).String()
 				setTransferStatementHash(t, witness, transfer)
 				assignment = transfer
-			case "shielded_ics20_withdrawal":
+			case "shielded_withdrawal":
 				witness, withdrawal, nIn := loadWithdrawalFixture(t)
 				witness.RequiredSpend.Nullifier = addFieldElementBytes(
 					t,
@@ -437,7 +437,7 @@ func TestCircuitFamiliesRejectMutatedNullifier(t *testing.T) {
 
 func TestPaddedSpendCircuitsRejectMutatedDummyNullifierSeed(t *testing.T) {
 	for _, family := range testCircuitFamilies() {
-		if family.name != "transfer" && family.name != "shielded_ics20_withdrawal" {
+		if family.name != "transfer" && family.name != "shielded_withdrawal" {
 			continue
 		}
 		t.Run(family.name, func(t *testing.T) {
@@ -451,12 +451,12 @@ func TestPaddedSpendCircuitsRejectMutatedDummyNullifierSeed(t *testing.T) {
 					t.Fatalf("decode dummy transfer fixture: %v", err)
 				}
 				assignment = transfer
-			case "shielded_ics20_withdrawal":
-				fixture := testfixtures.LoadShieldedIcs20WithdrawalWitness(
-					"shielded_ics20_withdrawal_unregulated",
+			case "shielded_withdrawal":
+				fixture := testfixtures.LoadShieldedWithdrawalWitness(
+					"shielded_withdrawal_unregulated",
 				)
 				withdrawal, _, err :=
-					abi.NewShieldedIcs20WithdrawalCircuitAssignmentFromWitness(
+					abi.NewShieldedWithdrawalCircuitAssignmentFromWitness(
 						fixture,
 					)
 				if err != nil {
@@ -474,7 +474,7 @@ func TestPaddedSpendCircuitsRejectMutatedDummyNullifierSeed(t *testing.T) {
 						mutateFieldByOne(a.OptionalSpend.DummyNullifierSeed)
 					mutated = true
 				}
-			case *circuits.ShieldedIcs20WithdrawalCircuit:
+			case *circuits.ShieldedWithdrawalCircuit:
 				if variableIsOne(a.OptionalSpend.IsDummy) {
 					a.OptionalSpend.DummyNullifierSeed =
 						mutateFieldByOne(a.OptionalSpend.DummyNullifierSeed)

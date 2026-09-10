@@ -1,9 +1,7 @@
 use shieldd_sdk_fee::Gas;
-use shieldd_sdk_ibc::IbcRelay;
 use shieldd_sdk_shielded_pool::{
     HostWithdrawal, HostWithdrawalDestination, NoteReshape, NoteReshapePlan,
-    ShieldedHostWithdrawal, ShieldedHostWithdrawalPlan, ShieldedIcs20Withdrawal,
-    ShieldedIcs20WithdrawalPlan,
+    ShieldedHostWithdrawal, ShieldedHostWithdrawalPlan,
 };
 
 use crate::{
@@ -152,8 +150,7 @@ impl GasCost for ActionPlan {
                 plan.family_id().input_count(),
                 plan.family_id().output_count(),
             ),
-            ActionPlan::IbcAction(i) => i.gas_cost(),
-            ActionPlan::ShieldedIcs20Withdrawal(w) => w.gas_cost(),
+
             ActionPlan::ShieldedHostWithdrawal(w) => w.gas_cost(),
             ActionPlan::ComplianceRegisterAsset(_) | ActionPlan::ComplianceRegisterUser(_) => Gas {
                 block_space: 100,
@@ -173,9 +170,9 @@ impl GasCost for Action {
                 note_reshape.body.inputs.len(),
                 note_reshape.body.outputs.len(),
             ),
-            Action::ShieldedIcs20Withdrawal(withdrawal) => withdrawal.gas_cost(),
+
             Action::ShieldedHostWithdrawal(withdrawal) => withdrawal.gas_cost(),
-            Action::IbcRelay(x) => x.gas_cost(),
+
             Action::ComplianceRegisterAsset(_) | Action::ComplianceRegisterUser(_) => Gas {
                 block_space: 100,
                 compact_block_space: 100,
@@ -219,18 +216,6 @@ impl GasCost for NoteReshapePlan {
     }
 }
 
-impl GasCost for ShieldedIcs20WithdrawalPlan {
-    fn gas_cost(&self) -> Gas {
-        shielded_withdrawal_gas_cost()
-    }
-}
-
-impl GasCost for ShieldedIcs20Withdrawal {
-    fn gas_cost(&self) -> Gas {
-        shielded_withdrawal_gas_cost()
-    }
-}
-
 impl GasCost for ShieldedHostWithdrawal {
     fn gas_cost(&self) -> Gas {
         host_withdrawal_gas_cost(&self.body.withdrawal)
@@ -240,17 +225,6 @@ impl GasCost for ShieldedHostWithdrawal {
 impl GasCost for ShieldedHostWithdrawalPlan {
     fn gas_cost(&self) -> Gas {
         host_withdrawal_gas_cost(&self.withdrawal)
-    }
-}
-
-impl GasCost for IbcRelay {
-    fn gas_cost(&self) -> Gas {
-        Gas {
-            block_space: self.encode_to_vec().len() as u64,
-            compact_block_space: 0,
-            verification: 0,
-            execution: 10,
-        }
     }
 }
 

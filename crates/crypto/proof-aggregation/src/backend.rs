@@ -58,8 +58,7 @@ use crate::{
     statement::{AggregateStatement, AggregateStatementError},
     torus::{deserialize_torus_aggregate_proof, serialize_torus_aggregate_proof},
     transcript::{
-        NoteReshapeTranscriptDigest, ShieldedIcs20WithdrawalTranscriptDigest,
-        TransferTranscriptDigest,
+        NoteReshapeTranscriptDigest, ShieldedWithdrawalTranscriptDigest, TransferTranscriptDigest,
     },
     transfer_family_dispatch::{aggregate_transfer_real_count, verify_transfer_aggregate},
     ProofFamilyId,
@@ -388,8 +387,8 @@ impl SnarkpackBackend {
                     other.get()
                 )),
             },
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                aggregate_with_digest_torus_real_count::<ShieldedIcs20WithdrawalTranscriptDigest>(
+            ProofFamilyId::ShieldedWithdrawal(_) => {
+                aggregate_with_digest_torus_real_count::<ShieldedWithdrawalTranscriptDigest>(
                     statement.challenge_context(),
                     items,
                     statement.real_count() as usize,
@@ -454,8 +453,8 @@ impl SnarkpackBackend {
                     )))
                 }
             },
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                verify_with_digest_torus::<ShieldedIcs20WithdrawalTranscriptDigest>(
+            ProofFamilyId::ShieldedWithdrawal(_) => {
+                verify_with_digest_torus::<ShieldedWithdrawalTranscriptDigest>(
                     call.challenge_context(),
                     call.pvk(),
                     call.inner_proof_bytes(),
@@ -640,8 +639,8 @@ impl SnarkpackBackend {
                     other.get()
                 ))),
             },
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                verify_with_digest_shipping::<ShieldedIcs20WithdrawalTranscriptDigest>(
+            ProofFamilyId::ShieldedWithdrawal(_) => {
+                verify_with_digest_shipping::<ShieldedWithdrawalTranscriptDigest>(
                     call_id,
                     call.challenge_context(),
                     call.pvk(),
@@ -683,8 +682,8 @@ impl SnarkpackBackend {
                 statement.real_count() as usize,
                 srs,
             ),
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                aggregate_with_digest_real_count::<ShieldedIcs20WithdrawalTranscriptDigest>(
+            ProofFamilyId::ShieldedWithdrawal(_) => {
+                aggregate_with_digest_real_count::<ShieldedWithdrawalTranscriptDigest>(
                     statement.challenge_context(),
                     items,
                     statement.real_count() as usize,
@@ -734,8 +733,8 @@ impl SnarkpackBackend {
                 call.padded_public_inputs(),
                 call.srs(),
             )?,
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                verify_with_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(
+            ProofFamilyId::ShieldedWithdrawal(_) => {
+                verify_with_digest::<ShieldedWithdrawalTranscriptDigest>(
                     call.challenge_context(),
                     call.pvk(),
                     call.inner_proof_bytes(),
@@ -968,7 +967,7 @@ mod tests {
     use proptest::prelude::*;
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
     use shieldd_sdk_proof_params::batch;
-    use shieldd_sdk_shielded_pool::ShieldedIcs20WithdrawalFamilyId;
+    use shieldd_sdk_shielded_pool::ShieldedWithdrawalFamilyId;
 
     use crate::transcript::TransferTranscriptDigest;
     use crate::{
@@ -1183,8 +1182,8 @@ mod tests {
                 .into_iter()
                 .map(ProofFamilyId::NoteReshape),
         );
-        families.push(ProofFamilyId::ShieldedIcs20Withdrawal(
-            ShieldedIcs20WithdrawalFamilyId::Canonical,
+        families.push(ProofFamilyId::ShieldedWithdrawal(
+            ShieldedWithdrawalFamilyId::Canonical,
         ));
         families
     }
@@ -1828,8 +1827,7 @@ mod tests {
         let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
         let wrapped = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
-        let wrong_family =
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical);
+        let wrong_family = ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical);
 
         let error = SnarkpackBackend::verify_shipping_family_aggregate(
             shipping_call(wrong_family, items.len(), padded_items.len()),
@@ -2026,19 +2024,18 @@ mod tests {
         compressed_bytes(&BackendG1::zero().into_affine()).len()
     }
     #[test]
-    fn snarkpack_backend_accepts_valid_shielded_ics20_withdrawal_aggregate() {
+    fn snarkpack_backend_accepts_valid_shielded_withdrawal_aggregate() {
         let (pvk, items) = sample_items();
         let srs = DevSrs::default();
         let padded_items =
             pad_items_to_power_of_two(&items, srs.max_padded_count as usize).expect("padding");
-        let family_id =
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical);
+        let family_id = ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical);
         let statement = statement_for_items(family_id, &pvk, items.len(), &padded_items, &srs);
         let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
 
         verify_family_aggregate(&statement, &pvk, &aggregate, &srs)
-            .expect("shielded ICS-20 withdrawal aggregate verification should succeed");
+            .expect("shielded withdrawal aggregate verification should succeed");
     }
 
     #[test]
@@ -2107,7 +2104,7 @@ mod tests {
         let aggregate = aggregate_family(&statement, &pvk, &padded_items, &srs)
             .expect("aggregation should succeed");
         let wrong_statement = statement_for_items(
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+            ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical),
             &pvk,
             items.len(),
             &padded_items,
@@ -2265,7 +2262,7 @@ mod tests {
         let wrong_public_input_statement =
             statement_for_public_inputs(family_id, &pvk, items.len(), &mutated_inputs, &srs);
         let wrong_family_statement = statement_for_items(
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+            ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical),
             &pvk,
             items.len(),
             &padded_items,
@@ -2484,7 +2481,7 @@ mod tests {
             let seed_base = match family_id {
                 ProofFamilyId::Transfer => 9_000,
                 ProofFamilyId::NoteReshape(family_id) => 9_000 + u64::from(family_id.get()) * 100,
-                ProofFamilyId::ShieldedIcs20Withdrawal(_) => 9_500,
+                ProofFamilyId::ShieldedWithdrawal(_) => 9_500,
             };
             for count in [1usize, 2, 4, 8] {
                 let seed = seed_base + count as u64;
@@ -2606,15 +2603,11 @@ mod tests {
             ProofFamilyId::NoteReshape(other) => {
                 panic!("unregistered note reshape baseline family {}", other.get())
             }
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => {
-                challenge_trace_for_digest::<ShieldedIcs20WithdrawalTranscriptDigest>(
-                    &statement,
-                    &pvk,
-                    &padded_items,
-                    &srs,
-                    inner,
-                )
-            }
+            ProofFamilyId::ShieldedWithdrawal(_) => challenge_trace_for_digest::<
+                ShieldedWithdrawalTranscriptDigest,
+            >(
+                &statement, &pvk, &padded_items, &srs, inner
+            ),
         }
     }
 

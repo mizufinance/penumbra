@@ -1,18 +1,17 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_proto::{core::transaction::v1 as pb, DomainType};
-use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId};
+use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedWithdrawalFamilyId};
 
 const PROOF_FAMILY_TRANSFER: u32 = pb::ProofFamilyId::Transfer as u32;
 const PROOF_FAMILY_NOTE_RESHAPE: u32 = pb::ProofFamilyId::NoteReshape as u32;
-const PROOF_FAMILY_SHIELDED_ICS20_WITHDRAWAL: u32 =
-    pb::ProofFamilyId::ShieldedIcs20Withdrawal as u32;
+const PROOF_FAMILY_SHIELDED_WITHDRAWAL: u32 = pb::ProofFamilyId::ShieldedWithdrawal as u32;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ProofFamilyId {
     Transfer,
     NoteReshape(NoteReshapeFamilyId),
-    ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId),
+    ShieldedWithdrawal(ShieldedWithdrawalFamilyId),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -34,7 +33,7 @@ pub struct AggregateBundle {
 pub enum FamilyRouteKind {
     Transfer,
     NoteReshape,
-    ShieldedIcs20Withdrawal,
+    ShieldedWithdrawal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,7 +46,7 @@ pub struct FamilyRoute {
 pub(crate) struct FamilyProtoFields {
     pub family_id: u32,
     pub note_reshape_family_id: u32,
-    pub shielded_ics20_withdrawal_family_id: u32,
+    pub shielded_withdrawal_family_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,17 +66,17 @@ pub(crate) fn family_proto_fields(family_id: ProofFamilyId) -> FamilyProtoFields
         ProofFamilyId::Transfer => FamilyProtoFields {
             family_id: PROOF_FAMILY_TRANSFER,
             note_reshape_family_id: 0,
-            shielded_ics20_withdrawal_family_id: 0,
+            shielded_withdrawal_family_id: 0,
         },
         ProofFamilyId::NoteReshape(subfamily) => FamilyProtoFields {
             family_id: PROOF_FAMILY_NOTE_RESHAPE,
             note_reshape_family_id: subfamily.get(),
-            shielded_ics20_withdrawal_family_id: 0,
+            shielded_withdrawal_family_id: 0,
         },
-        ProofFamilyId::ShieldedIcs20Withdrawal(subfamily) => FamilyProtoFields {
-            family_id: PROOF_FAMILY_SHIELDED_ICS20_WITHDRAWAL,
+        ProofFamilyId::ShieldedWithdrawal(subfamily) => FamilyProtoFields {
+            family_id: PROOF_FAMILY_SHIELDED_WITHDRAWAL,
             note_reshape_family_id: 0,
-            shielded_ics20_withdrawal_family_id: subfamily.get(),
+            shielded_withdrawal_family_id: subfamily.get(),
         },
     }
 }
@@ -85,11 +84,11 @@ pub(crate) fn family_proto_fields(family_id: ProofFamilyId) -> FamilyProtoFields
 pub fn family_route_from_proto_fields(
     family_id: u32,
     note_reshape_family_id: u32,
-    shielded_ics20_withdrawal_family_id: u32,
+    shielded_withdrawal_family_id: u32,
 ) -> Result<FamilyRoute, FamilyRouteError> {
     match family_id {
         PROOF_FAMILY_TRANSFER => {
-            if note_reshape_family_id != 0 || shielded_ics20_withdrawal_family_id != 0 {
+            if note_reshape_family_id != 0 || shielded_withdrawal_family_id != 0 {
                 Err(FamilyRouteError::UnexpectedSubfamily)
             } else {
                 Ok(FamilyRoute {
@@ -101,7 +100,7 @@ pub fn family_route_from_proto_fields(
         PROOF_FAMILY_NOTE_RESHAPE => {
             if note_reshape_family_id == 0 {
                 Err(FamilyRouteError::MissingSubfamily)
-            } else if shielded_ics20_withdrawal_family_id != 0 {
+            } else if shielded_withdrawal_family_id != 0 {
                 Err(FamilyRouteError::UnexpectedSubfamily)
             } else if NoteReshapeFamilyId::try_from(note_reshape_family_id).is_ok() {
                 Ok(FamilyRoute {
@@ -112,17 +111,15 @@ pub fn family_route_from_proto_fields(
                 Err(FamilyRouteError::UnknownSubfamily)
             }
         }
-        PROOF_FAMILY_SHIELDED_ICS20_WITHDRAWAL => {
-            if shielded_ics20_withdrawal_family_id == 0 {
+        PROOF_FAMILY_SHIELDED_WITHDRAWAL => {
+            if shielded_withdrawal_family_id == 0 {
                 Err(FamilyRouteError::MissingSubfamily)
             } else if note_reshape_family_id != 0 {
                 Err(FamilyRouteError::UnexpectedSubfamily)
-            } else if ShieldedIcs20WithdrawalFamilyId::try_from(shielded_ics20_withdrawal_family_id)
-                .is_ok()
-            {
+            } else if ShieldedWithdrawalFamilyId::try_from(shielded_withdrawal_family_id).is_ok() {
                 Ok(FamilyRoute {
-                    kind: FamilyRouteKind::ShieldedIcs20Withdrawal,
-                    subfamily_id: shielded_ics20_withdrawal_family_id,
+                    kind: FamilyRouteKind::ShieldedWithdrawal,
+                    subfamily_id: shielded_withdrawal_family_id,
                 })
             } else {
                 Err(FamilyRouteError::UnknownSubfamily)
@@ -137,7 +134,7 @@ impl From<ProofFamilyId> for pb::ProofFamilyId {
         match value {
             ProofFamilyId::Transfer => Self::Transfer,
             ProofFamilyId::NoteReshape(_) => Self::NoteReshape,
-            ProofFamilyId::ShieldedIcs20Withdrawal(_) => Self::ShieldedIcs20Withdrawal,
+            ProofFamilyId::ShieldedWithdrawal(_) => Self::ShieldedWithdrawal,
         }
     }
 }
@@ -146,7 +143,7 @@ impl ProofFamilyId {
     pub(crate) fn try_from_proto_fields(
         family_id: i32,
         note_reshape_family_id: u32,
-        shielded_ics20_withdrawal_family_id: u32,
+        shielded_withdrawal_family_id: u32,
     ) -> Result<Self> {
         let family_id_u32 =
             u32::try_from(family_id).map_err(|_| anyhow!("unknown proof family id {family_id}"))?;
@@ -156,15 +153,15 @@ impl ProofFamilyId {
         let route = family_route_from_proto_fields(
             family_id_u32,
             note_reshape_family_id,
-            shielded_ics20_withdrawal_family_id,
+            shielded_withdrawal_family_id,
         )
         .map_err(|err| family_route_error_message(err, family_id))?;
         match route.kind {
             FamilyRouteKind::Transfer => Ok(Self::Transfer),
             FamilyRouteKind::NoteReshape => Ok(Self::NoteReshape(route.subfamily_id.try_into()?)),
-            FamilyRouteKind::ShieldedIcs20Withdrawal => Ok(Self::ShieldedIcs20Withdrawal(
-                route.subfamily_id.try_into()?,
-            )),
+            FamilyRouteKind::ShieldedWithdrawal => {
+                Ok(Self::ShieldedWithdrawal(route.subfamily_id.try_into()?))
+            }
         }
     }
 }
@@ -224,7 +221,7 @@ impl From<FamilyAggregate> for pb::FamilyAggregate {
         Self {
             family_id: fields.family_id as i32,
             note_reshape_family_id: fields.note_reshape_family_id,
-            shielded_ics20_withdrawal_family_id: fields.shielded_ics20_withdrawal_family_id,
+            shielded_withdrawal_family_id: fields.shielded_withdrawal_family_id,
             real_count: value.real_count,
             padded_count: value.padded_count,
             aggregate_proof: value.aggregate_proof,
@@ -240,7 +237,7 @@ impl TryFrom<pb::FamilyAggregate> for FamilyAggregate {
             family_id: ProofFamilyId::try_from_proto_fields(
                 value.family_id,
                 value.note_reshape_family_id,
-                value.shielded_ics20_withdrawal_family_id,
+                value.shielded_withdrawal_family_id,
             )?,
             real_count: value.real_count,
             padded_count: value.padded_count,
@@ -256,13 +253,13 @@ mod tests {
         FamilyRouteKind, ProofFamilyId,
     };
     use shieldd_sdk_proto::DomainType;
-    use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId};
+    use shieldd_sdk_shielded_pool::{NoteReshapeFamilyId, ShieldedWithdrawalFamilyId};
 
     #[test]
     fn canonical_family_fields_round_trip_through_router() {
         let mut families = vec![
             ProofFamilyId::Transfer,
-            ProofFamilyId::ShieldedIcs20Withdrawal(ShieldedIcs20WithdrawalFamilyId::Canonical),
+            ProofFamilyId::ShieldedWithdrawal(ShieldedWithdrawalFamilyId::Canonical),
         ];
         families.extend(
             NoteReshapeFamilyId::ALL
@@ -275,7 +272,7 @@ mod tests {
             let route = family_route_from_proto_fields(
                 fields.family_id,
                 fields.note_reshape_family_id,
-                fields.shielded_ics20_withdrawal_family_id,
+                fields.shielded_withdrawal_family_id,
             )
             .expect("canonical family fields must route");
             match family {
@@ -287,8 +284,8 @@ mod tests {
                     assert_eq!(route.kind, FamilyRouteKind::NoteReshape);
                     assert_eq!(route.subfamily_id, subfamily.get());
                 }
-                ProofFamilyId::ShieldedIcs20Withdrawal(subfamily) => {
-                    assert_eq!(route.kind, FamilyRouteKind::ShieldedIcs20Withdrawal);
+                ProofFamilyId::ShieldedWithdrawal(subfamily) => {
+                    assert_eq!(route.kind, FamilyRouteKind::ShieldedWithdrawal);
                     assert_eq!(route.subfamily_id, subfamily.get());
                 }
             }
@@ -301,7 +298,7 @@ mod tests {
         let note_reshape =
             shieldd_sdk_proto::core::transaction::v1::ProofFamilyId::NoteReshape as u32;
         let withdrawal =
-            shieldd_sdk_proto::core::transaction::v1::ProofFamilyId::ShieldedIcs20Withdrawal as u32;
+            shieldd_sdk_proto::core::transaction::v1::ProofFamilyId::ShieldedWithdrawal as u32;
 
         assert_eq!(
             family_route_from_proto_fields(u32::MAX, 0, 0),
@@ -384,7 +381,7 @@ mod tests {
                 family_id: shieldd_sdk_proto::core::transaction::v1::ProofFamilyId::Unspecified
                     as i32,
                 note_reshape_family_id: 0,
-                shielded_ics20_withdrawal_family_id: 0,
+                shielded_withdrawal_family_id: 0,
                 real_count: 1,
                 padded_count: 1,
                 aggregate_proof: vec![1, 2, 3],

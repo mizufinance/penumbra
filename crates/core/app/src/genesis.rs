@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use shieldd_sdk_compliance::genesis::Content as ComplianceContent;
 use shieldd_sdk_fee::genesis::Content as FeeContent;
-use shieldd_sdk_ibc::genesis::Content as IBCContent;
 use shieldd_sdk_proto::{shieldd::core::app::v1 as pb, DomainType};
 use shieldd_sdk_sct::genesis::Content as SctContent;
 use shieldd_sdk_shielded_pool::genesis::Content as ShieldedPoolContent;
@@ -35,9 +34,7 @@ pub struct Content {
     pub fee_content: FeeContent,
     /// Compliance module genesis state.
     pub compliance_content: ComplianceContent,
-    /// IBC module genesis state.
-    pub ibc_content: IBCContent,
-    // Sct module genesis state.
+    /// SCT module genesis state.
     pub sct_content: SctContent,
     /// Shielded pool module genesis state.
     pub shielded_pool_content: ShieldedPoolContent,
@@ -74,7 +71,6 @@ impl From<Content> for pb::GenesisContent {
             chain_id: genesis.chain_id,
             fee_content: Some(genesis.fee_content.into()),
             compliance_content: Some(genesis.compliance_content.into()),
-            ibc_content: Some(genesis.ibc_content.into()),
             sct_content: Some(genesis.sct_content.into()),
             shielded_pool_content: Some(genesis.shielded_pool_content.into()),
         }
@@ -114,10 +110,6 @@ impl TryFrom<pb::GenesisContent> for Content {
                 .map(TryInto::try_into)
                 .transpose()?
                 .unwrap_or_default(),
-            ibc_content: msg
-                .ibc_content
-                .ok_or_else(|| anyhow::anyhow!("proto response missing ibc content"))?
-                .try_into()?,
             sct_content: msg
                 .sct_content
                 .ok_or_else(|| anyhow::anyhow!("proto response missing sct content"))?

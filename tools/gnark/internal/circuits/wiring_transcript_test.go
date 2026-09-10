@@ -61,8 +61,8 @@ func TestCircuitExportManifestsCoverEveryConstraint(t *testing.T) {
 	type compileExport func() (constraint.ConstraintSystem, *ConstraintManifest, error)
 	cases := map[string]compileExport{
 		"transfer": CompileTransferForExport,
-		"shielded_ics20_withdrawal": func() (constraint.ConstraintSystem, *ConstraintManifest, error) {
-			return CompileShieldedIcs20WithdrawalForExport("shielded_ics20_withdrawal", 2)
+		"shielded_withdrawal": func() (constraint.ConstraintSystem, *ConstraintManifest, error) {
+			return CompileShieldedWithdrawalForExport("shielded_withdrawal", 2)
 		},
 	}
 	for _, family := range generated.NoteReshapeFamilies {

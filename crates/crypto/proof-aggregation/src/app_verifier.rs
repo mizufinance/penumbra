@@ -22,6 +22,6 @@ pub fn app_verify_family_code(family_id: ProofFamilyId) -> AppVerifyFamilyCode {
     AppVerifyFamilyCode {
         proof_family_id: fields.family_id,
         note_reshape_family_id: fields.note_reshape_family_id,
-        shielded_ics20_withdrawal_family_id: fields.shielded_ics20_withdrawal_family_id,
+        shielded_withdrawal_family_id: fields.shielded_withdrawal_family_id,
     }
 }

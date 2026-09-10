@@ -1125,8 +1125,8 @@ mod tests {
         HostExecution as DomainHostExecution, HostTransfer, HostWithdrawal as DomainHostWithdrawal,
         NotePayload, NoteSeizure, NoteSeizureAuthorizationBody, NoteSeizureProofPrivate,
         NoteSeizureProofPublic, RecoveryCapsule, Rseed, ShieldedHostWithdrawal,
-        ShieldedHostWithdrawalBody, ShieldedIcs20WithdrawalChangeBody,
-        ShieldedIcs20WithdrawalFamilyId, ShieldedIcs20WithdrawalProof,
+        ShieldedHostWithdrawalBody, ShieldedWithdrawalChangeBody, ShieldedWithdrawalFamilyId,
+        ShieldedWithdrawalProof,
     };
     use shieldd_sdk_tct as tct;
     use std::ops::Deref as _;
@@ -1236,7 +1236,7 @@ mod tests {
     fn host_withdrawal_action() -> ShieldedHostWithdrawal {
         ShieldedHostWithdrawal {
             body: ShieldedHostWithdrawalBody {
-                family_id: ShieldedIcs20WithdrawalFamilyId::Canonical,
+                family_id: ShieldedWithdrawalFamilyId::Canonical,
                 anchor: shieldd_sdk_tct::Tree::default().root(),
                 balance_commitment: Default::default(),
                 inputs: Vec::new(),
@@ -1249,7 +1249,7 @@ mod tests {
                         recipient: "bank1recipient".to_owned(),
                     }),
                 },
-                change_output: ShieldedIcs20WithdrawalChangeBody {
+                change_output: ShieldedWithdrawalChangeBody {
                     note_payload: NotePayload::dummy(),
                     wrapped_memo_key: WrappedMemoKey([0u8; 48]),
                     ovk_wrapped_key: OvkWrappedKey([0u8; 48]),
@@ -1271,7 +1271,7 @@ mod tests {
                     shieldd_sdk_shielded_pool::VolumeAccumulatorPayload::canonical_fee_funding(),
             },
             auth_sigs: Vec::new(),
-            proof: ShieldedIcs20WithdrawalProof::default(),
+            proof: ShieldedWithdrawalProof::default(),
         }
     }
 
@@ -1658,23 +1658,6 @@ mod tests {
         assert_eq!(response.root_hash.len(), 32);
         assert_eq!(host.phase(), HostExecutionPhase::Idle);
         assert!(App::is_ready(storage.latest_snapshot()).await);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn host_execution_init_genesis_persists_ibc_parameters() -> Result<()> {
-        let storage = temp_storage().await;
-        let mut host = HostExecution::new(storage.deref().clone());
-
-        host.init_genesis(host_genesis()).await?;
-
-        let ibc_params =
-            shieldd_sdk_ibc::StateReadExt::get_ibc_params(host.app.state.as_ref()).await?;
-        assert_eq!(
-            ibc_params,
-            shieldd_sdk_ibc::params::IBCParameters::default()
-        );
 
         Ok(())
     }

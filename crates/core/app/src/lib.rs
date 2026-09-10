@@ -3,12 +3,8 @@
 
 use once_cell::sync::Lazy;
 
-pub static SUBSTORE_PREFIXES: Lazy<Vec<String>> = Lazy::new(|| {
-    vec![
-        shieldd_sdk_ibc::IBC_SUBSTORE_PREFIX.to_string(),
-        COMETBFT_SUBSTORE_PREFIX.to_string(),
-    ]
-});
+pub static SUBSTORE_PREFIXES: Lazy<Vec<String>> =
+    Lazy::new(|| vec![COMETBFT_SUBSTORE_PREFIX.to_string()]);
 
 /// The substore prefix used for historical block transaction data.
 pub static COMETBFT_SUBSTORE_PREFIX: &'static str = "cometbft-data";
@@ -30,10 +26,7 @@ cfg_if::cfg_if! {
         pub mod test_support;
 
         mod action_handler;
-        mod shieldd_host_chain;
 
-        pub use crate::{
-            app::StateWriteExt, metrics::register_metrics, shieldd_host_chain::ShielddHost,
-        };
+
     }
 }

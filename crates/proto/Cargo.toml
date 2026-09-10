@@ -8,7 +8,7 @@ license = {workspace = true}
 edition = {workspace = true}
 
 [features]
-rpc = ["dep:tonic", "ibc-proto/client"]
+rpc = ["dep:tonic"]
 box-grpc = ["dep:http-body", "dep:http-body-util", "dep:tonic", "dep:tower"]
 cnidarium = ["dep:cnidarium"]
 
@@ -23,7 +23,6 @@ futures = {workspace = true}
 hex = {workspace = true}
 http-body = {workspace = true, optional = true}
 http-body-util = {workspace = true, optional = true}
-ibc-types = {workspace = true, features = ["std"], default-features = true}
 ics23 = {workspace = true}
 pbjson = {workspace = true}
 pbjson-types = {workspace = true}

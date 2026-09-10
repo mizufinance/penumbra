@@ -49,21 +49,20 @@ pub struct OutputRef {
 pub enum ComplianceRecordRef {
     TransferOutput(OutputRef),
     HostWithdrawal(ActionRef),
-    Ics20Withdrawal(ActionRef),
 }
 
 impl ComplianceRecordRef {
     pub fn action(&self) -> &ActionRef {
         match self {
             Self::TransferOutput(output) => &output.action,
-            Self::HostWithdrawal(action) | Self::Ics20Withdrawal(action) => action,
+            Self::HostWithdrawal(action) => action,
         }
     }
 
     pub fn output_index(&self) -> u32 {
         match self {
             Self::TransferOutput(output) => output.output_index,
-            Self::HostWithdrawal(_) | Self::Ics20Withdrawal(_) => 0,
+            Self::HostWithdrawal(_) => 0,
         }
     }
 

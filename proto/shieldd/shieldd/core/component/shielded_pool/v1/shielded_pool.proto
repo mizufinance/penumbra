@@ -3,7 +3,6 @@ package shieldd.core.component.shielded_pool.v1;
 
 import "shieldd/core/asset/v1/asset.proto";
 import "shieldd/core/component/compliance/v1/compliance.proto";
-import "shieldd/core/component/ibc/v1/ibc.proto";
 import "shieldd/core/component/sct/v1/sct.proto";
 import "shieldd/core/keys/v1/keys.proto";
 import "shieldd/core/num/v1/num.proto";
@@ -104,8 +103,8 @@ message ZKNoteReshapeProof {
   bytes inner = 1;
 }
 
-// A Shieldd ZK shielded ICS-20 withdrawal proof.
-message ZKShieldedIcs20WithdrawalProof {
+// A Shieldd ZK shielded withdrawal proof.
+message ZKShieldedWithdrawalProof {
   bytes inner = 1;
 }
 
@@ -339,7 +338,7 @@ message ShieldedHostWithdrawal {
   // The authorizing signatures for each consumed input.
   repeated crypto.decaf377_rdsa.v1.SpendAuthSignature auth_sigs = 2;
   // The proof that the withdrawal is well-formed.
-  ZKShieldedIcs20WithdrawalProof proof = 3;
+  ZKShieldedWithdrawalProof proof = 3;
 }
 
 message ShieldedHostWithdrawalBody {
@@ -354,7 +353,7 @@ message ShieldedHostWithdrawalBody {
   // The embedded host-chain withdrawal payload.
   HostWithdrawal withdrawal = 5;
   // The sender-owned change note or sender-owned zero-value dummy.
-  ShieldedIcs20WithdrawalChangeBody change_output = 6;
+  ShieldedWithdrawalChangeBody change_output = 6;
   // Target timestamp for compliance verification (Unix UTC seconds).
   uint64 target_timestamp = 7;
   // Compliance tree anchor (user tree root) used during proof generation.
@@ -405,86 +404,13 @@ message ShieldedHostWithdrawalPlan {
   VolumeAccumulatorPlan volume_accumulator = 9;
 }
 
-message ShieldedIcs20WithdrawalChangeBody {
+message ShieldedWithdrawalChangeBody {
   // The minimal data required to scan and process the created change note.
   NotePayload note_payload = 1;
   // An encrypted key for decrypting the memo.
   bytes wrapped_memo_key = 2;
   // The key material used for note encryption, wrapped to the sender's OVK.
   bytes ovk_wrapped_key = 3;
-}
-
-// Withdraws shielded funds over ICS-20 while keeping shielded change in the same action.
-message ShieldedIcs20Withdrawal {
-  // The effecting data of the withdrawal.
-  ShieldedIcs20WithdrawalBody body = 1;
-  // The authorizing signatures for each consumed input.
-  repeated crypto.decaf377_rdsa.v1.SpendAuthSignature auth_sigs = 2;
-  // The proof that the withdrawal is well-formed.
-  ZKShieldedIcs20WithdrawalProof proof = 3;
-}
-
-message ShieldedIcs20WithdrawalBody {
-  // The proving family this action uses.
-  uint32 family_id = 1;
-  // The state commitment tree anchor used during proof generation.
-  crypto.tct.v1.MerkleRoot anchor = 2;
-  // A commitment to the net balance of the action.
-  asset.v1.BalanceCommitment balance_commitment = 3;
-  // The consumed notes.
-  repeated TransferInputBody inputs = 4;
-  // The embedded outbound ICS-20 withdrawal payload.
-  shieldd.core.component.ibc.v1.Ics20Withdrawal withdrawal = 5;
-  // The sender-owned change note or sender-owned zero-value dummy.
-  ShieldedIcs20WithdrawalChangeBody change_output = 6;
-  // Target timestamp for compliance verification (Unix UTC seconds).
-  uint64 target_timestamp = 7;
-  // Compliance tree anchor (user tree root) used during proof generation.
-  crypto.tct.v1.StateCommitment compliance_anchor = 8;
-  // Asset tree anchor used during proof generation.
-  crypto.tct.v1.StateCommitment asset_anchor = 9;
-  // Sender routing tag, present even when the change output is dummy.
-  RoutingTag routing_tag = 10;
-  // Poseidon identifier of the privately selected protocol parameter set.
-  bytes routing_parameter_set_id = 11;
-  // Proof-bound encryption of the exact sender compliance address.
-  bytes withdrawal_compliance_ciphertext = 12;
-  VolumeAccumulatorPayload volume_accumulator = 14;
-}
-
-message ShieldedIcs20WithdrawalView {
-  message Visible {
-    ShieldedIcs20Withdrawal withdrawal = 1;
-    repeated NoteView spent_notes = 2;
-    NoteView change_note = 3;
-    keys.v1.PayloadKey payload_key = 4;
-  }
-
-  message Opaque {
-    ShieldedIcs20Withdrawal withdrawal = 1;
-  }
-
-  oneof shielded_ics20_withdrawal_view {
-    Visible visible = 1;
-    Opaque opaque = 2;
-  }
-}
-
-message ShieldedIcs20WithdrawalPlan {
-  reserved 1, 3;
-
-  // The blinding factor to use for the net balance commitment.
-  bytes value_blinding = 2;
-  // The shielded input plans fused into this withdrawal.
-  repeated ShieldedInputPlan spends = 4;
-  // The sender-owned change output, if any.
-  ShieldedOutputPlan change_output = 5;
-  // The embedded outbound ICS-20 withdrawal payload.
-  shieldd.core.component.ibc.v1.Ics20Withdrawal withdrawal = 6;
-  // Protocol routing parameter set used to construct and prove the action.
-  DiscoveryParameters routing_parameters = 7;
-  WithdrawalContext compliance = 8;
-  VolumeAccumulatorPlan volume_accumulator = 9;
 }
 
 message NoteReshapeInputBody {
@@ -607,7 +533,6 @@ service QueryService {
   // of the asset IDs array.
   rpc AssetMetadataByIds(AssetMetadataByIdsRequest) returns (stream AssetMetadataByIdsResponse);
 }
-
 
 // Requests information on an asset by asset id
 message AssetMetadataByIdRequest {

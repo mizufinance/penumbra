@@ -91,7 +91,7 @@ pub struct StatementEncodingInput {
     pub backend_id: Vec<u8>,
     pub proof_family_id: u32,
     pub note_reshape_family_id: u32,
-    pub shielded_ics20_withdrawal_family_id: u32,
+    pub shielded_withdrawal_family_id: u32,
     pub srs_id: [u8; 32],
     pub vk_digest: [u8; 32],
     pub real_count: u32,
@@ -380,7 +380,7 @@ pub(crate) fn statement_encoding_input_core(
         backend_id: DEV_SRS_BACKEND_ID.as_bytes().to_vec(),
         proof_family_id: family.family_id,
         note_reshape_family_id: family.note_reshape_family_id,
-        shielded_ics20_withdrawal_family_id: family.shielded_ics20_withdrawal_family_id,
+        shielded_withdrawal_family_id: family.shielded_withdrawal_family_id,
         srs_id,
         vk_digest,
         real_count,
@@ -432,7 +432,7 @@ pub fn encode_statement(
     append_bytes_field(&mut bytes, PADDING_RULE_DOMAIN)?;
     append_u32_field(&mut bytes, input.proof_family_id);
     append_u32_field(&mut bytes, input.note_reshape_family_id);
-    append_u32_field(&mut bytes, input.shielded_ics20_withdrawal_family_id);
+    append_u32_field(&mut bytes, input.shielded_withdrawal_family_id);
     append_bytes_field(&mut bytes, &input.srs_id)?;
     append_bytes_field(&mut bytes, &input.vk_digest)?;
     append_u32_field(&mut bytes, input.real_count);
@@ -985,7 +985,7 @@ mod tests {
             backend_id: b"backend".to_vec(),
             proof_family_id: 1,
             note_reshape_family_id: 2,
-            shielded_ics20_withdrawal_family_id: 4,
+            shielded_withdrawal_family_id: 4,
             srs_id: [0x11; 32],
             vk_digest: [0x22; 32],
             real_count: 1,
@@ -997,7 +997,7 @@ mod tests {
 
         let mutations = [
             StatementEncodingInput {
-                version: 3,
+                version: AGGREGATE_PROTOCOL_VERSION + 1,
                 ..base.clone()
             },
             StatementEncodingInput {
@@ -1017,7 +1017,7 @@ mod tests {
                 ..base.clone()
             },
             StatementEncodingInput {
-                shielded_ics20_withdrawal_family_id: 9,
+                shielded_withdrawal_family_id: 9,
                 ..base.clone()
             },
             StatementEncodingInput {
@@ -1062,7 +1062,7 @@ mod tests {
             backend_id: b"backend-y".to_vec(),
             proof_family_id: 1,
             note_reshape_family_id: 2,
-            shielded_ics20_withdrawal_family_id: 4,
+            shielded_withdrawal_family_id: 4,
             srs_id: [0x11; 32],
             vk_digest: [0x22; 32],
             real_count: 1,
@@ -1112,7 +1112,7 @@ mod tests {
             backend_id: b"bc".to_vec(),
             proof_family_id: 1,
             note_reshape_family_id: 2,
-            shielded_ics20_withdrawal_family_id: 4,
+            shielded_withdrawal_family_id: 4,
             srs_id: [0x11; 32],
             vk_digest: [0x22; 32],
             real_count: 1,
@@ -1140,7 +1140,7 @@ mod tests {
             backend_id: b"backend".to_vec(),
             proof_family_id: 1,
             note_reshape_family_id: 2,
-            shielded_ics20_withdrawal_family_id: 4,
+            shielded_withdrawal_family_id: 4,
             srs_id: [0x11; 32],
             vk_digest: [0x22; 32],
             real_count: 1,
@@ -1167,7 +1167,7 @@ mod tests {
             backend_id: b"backend".to_vec(),
             proof_family_id: 1,
             note_reshape_family_id: 2,
-            shielded_ics20_withdrawal_family_id: 4,
+            shielded_withdrawal_family_id: 4,
             srs_id: [0x11; 32],
             vk_digest: [0x22; 32],
             real_count: 1,
@@ -1265,7 +1265,7 @@ mod tests {
                 backend_id: DEV_SRS_BACKEND_ID.as_bytes().to_vec(),
                 proof_family_id: 1,
                 note_reshape_family_id: 0,
-                shielded_ics20_withdrawal_family_id: 0,
+                shielded_withdrawal_family_id: 0,
                 srs_id: [1u8; 32],
                 vk_digest: [2u8; 32],
                 real_count,

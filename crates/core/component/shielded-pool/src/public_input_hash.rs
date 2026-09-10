@@ -7,7 +7,7 @@ use shieldd_sdk_proof_params::statement_hash::hash_statement_fields;
 
 use crate::{
     note_reshape::NoteReshapeProofPublic,
-    shielded_ics20_withdrawal::ShieldedIcs20WithdrawalProofPublic,
+    shielded_withdrawal::ShieldedWithdrawalProofPublic,
     transfer::{TransferProofPublic, TransferSpendPublic},
     transfer::{TRANSFER_PROOF_LABEL, TRANSFER_STATEMENT_FIELD_COUNT},
     NoteReshapeFamilyId, NoteSeizureProofPublic, NOTE_SEIZURE_PROOF_LABEL,
@@ -20,8 +20,8 @@ pub const NOTE_RESHAPE_STATEMENT_FIELDS_PER_OUTPUT: usize = 2;
 pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 43;
 pub const TRANSFER_STATEMENT_FIELDS_PER_INPUT: usize = 3;
 pub const TRANSFER_STATEMENT_FIELDS_PER_OUTPUT: usize = 2;
-pub const SHIELDED_ICS20_WITHDRAWAL_STATEMENT_BASE_FIELDS: usize = 25;
-pub const SHIELDED_ICS20_WITHDRAWAL_STATEMENT_FIELDS_PER_INPUT: usize = 3;
+pub const SHIELDED_WITHDRAWAL_STATEMENT_BASE_FIELDS: usize = 25;
+pub const SHIELDED_WITHDRAWAL_STATEMENT_FIELDS_PER_INPUT: usize = 3;
 
 pub const fn note_reshape_statement_field_count(n_in: usize, n_out: usize) -> usize {
     NOTE_RESHAPE_STATEMENT_BASE_FIELDS
@@ -35,9 +35,9 @@ pub const fn transfer_statement_field_count(n_in: usize, n_out: usize) -> usize 
         + TRANSFER_STATEMENT_FIELDS_PER_OUTPUT * n_out
 }
 
-pub const fn shielded_ics20_withdrawal_statement_field_count(n_in: usize) -> usize {
-    SHIELDED_ICS20_WITHDRAWAL_STATEMENT_BASE_FIELDS
-        + SHIELDED_ICS20_WITHDRAWAL_STATEMENT_FIELDS_PER_INPUT * n_in
+pub const fn shielded_withdrawal_statement_field_count(n_in: usize) -> usize {
+    SHIELDED_WITHDRAWAL_STATEMENT_BASE_FIELDS
+        + SHIELDED_WITHDRAWAL_STATEMENT_FIELDS_PER_INPUT * n_in
 }
 
 fn note_reshape_statement_hash_constant(family_id: NoteReshapeFamilyId, suffix: &str) -> Fq {
@@ -51,9 +51,8 @@ fn transfer_statement_hash_constant(suffix: &str) -> Fq {
     let label = format!("shieldd.shielded_pool.{TRANSFER_PROOF_LABEL}.public_input_hash.{suffix}");
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(label.as_bytes()).as_bytes())
 }
-fn shielded_ics20_withdrawal_statement_hash_constant(suffix: &str) -> Fq {
-    let label =
-        format!("shieldd.shielded_pool.shielded_ics20_withdrawal.public_input_hash.{suffix}");
+fn shielded_withdrawal_statement_hash_constant(suffix: &str) -> Fq {
+    let label = format!("shieldd.shielded_pool.shielded_withdrawal.public_input_hash.{suffix}");
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(label.as_bytes()).as_bytes())
 }
 fn note_seizure_statement_hash_constant(suffix: &str) -> Fq {
@@ -143,9 +142,7 @@ impl NoteReshapeOutputPublic for crate::NoteReshapeOutputPublic {
     }
 }
 
-impl NoteReshapeInputPublic
-    for crate::shielded_ics20_withdrawal::ShieldedIcs20WithdrawalInputPublic
-{
+impl NoteReshapeInputPublic for crate::shielded_withdrawal::ShieldedWithdrawalInputPublic {
     fn nullifier(&self) -> shieldd_sdk_sct::Nullifier {
         self.nullifier
     }
@@ -159,9 +156,7 @@ impl NoteReshapeInputPublic
     }
 }
 
-impl NoteReshapeOutputPublic
-    for crate::shielded_ics20_withdrawal::ShieldedIcs20WithdrawalChangePublic
-{
+impl NoteReshapeOutputPublic for crate::shielded_withdrawal::ShieldedWithdrawalChangePublic {
     fn note_commitment(&self) -> shieldd_sdk_tct::StateCommitment {
         self.note_commitment
     }
@@ -421,8 +416,8 @@ pub fn transfer_statement_fields(
     Ok(fields)
 }
 
-pub fn shielded_ics20_withdrawal_statement_fields(
-    public: &ShieldedIcs20WithdrawalProofPublic,
+pub fn shielded_withdrawal_statement_fields(
+    public: &ShieldedWithdrawalProofPublic,
 ) -> Result<Vec<Fq>, StatementHashError> {
     public
         .validate_shape()
@@ -430,7 +425,7 @@ pub fn shielded_ics20_withdrawal_statement_fields(
             field: e.to_string(),
         })?;
 
-    let expected = shielded_ics20_withdrawal_statement_field_count(public.family_id.input_count());
+    let expected = shielded_withdrawal_statement_field_count(public.family_id.input_count());
     let mut fields = note_reshape_statement_fields_inner(
         public.anchor,
         public.balance_commitment,
@@ -574,13 +569,13 @@ pub fn transfer_statement_hash(fields: &[Fq]) -> Result<Fq, StatementHashError> 
     )
 }
 
-pub fn shielded_ics20_withdrawal_statement_hash(fields: &[Fq]) -> Result<Fq, StatementHashError> {
+pub fn shielded_withdrawal_statement_hash(fields: &[Fq]) -> Result<Fq, StatementHashError> {
     hash_statement_fields(
-        &shielded_ics20_withdrawal_statement_hash_constant("statement"),
-        shielded_ics20_withdrawal_statement_hash_constant("pad0"),
-        shielded_ics20_withdrawal_statement_hash_constant("pad1"),
+        &shielded_withdrawal_statement_hash_constant("statement"),
+        shielded_withdrawal_statement_hash_constant("pad0"),
+        shielded_withdrawal_statement_hash_constant("pad1"),
         fields,
-        shielded_ics20_withdrawal_statement_field_count(2),
+        shielded_withdrawal_statement_field_count(2),
         |expected, got| StatementHashError::InvalidFieldLength { expected, got },
     )
 }
@@ -610,11 +605,11 @@ pub fn transfer_statement_hash_from_public(
     transfer_statement_hash(&fields)
 }
 
-pub fn shielded_ics20_withdrawal_statement_hash_from_public(
-    public: &ShieldedIcs20WithdrawalProofPublic,
+pub fn shielded_withdrawal_statement_hash_from_public(
+    public: &ShieldedWithdrawalProofPublic,
 ) -> Result<Fq, StatementHashError> {
-    let fields = shielded_ics20_withdrawal_statement_fields(public)?;
-    shielded_ics20_withdrawal_statement_hash(&fields)
+    let fields = shielded_withdrawal_statement_fields(public)?;
+    shielded_withdrawal_statement_hash(&fields)
 }
 
 pub fn note_seizure_statement_hash_from_public(

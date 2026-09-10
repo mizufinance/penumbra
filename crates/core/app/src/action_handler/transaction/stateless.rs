@@ -8,10 +8,9 @@ fn note_creating_output_count(tx: &Transaction) -> usize {
         .map(|action| match action {
             Action::Transfer(transfer) => transfer.body.outputs.len(),
             Action::NoteReshape(note_reshape) => note_reshape.body.outputs.len(),
-            Action::ShieldedIcs20Withdrawal(_) => 1,
+
             Action::ShieldedHostWithdrawal(_) => 1,
-            Action::IbcRelay(_)
-            | Action::ComplianceRegisterAsset(_)
+            Action::ComplianceRegisterAsset(_)
             | Action::ComplianceRegisterUser(_)
             | Action::AggregateBundle(_) => 0,
         })

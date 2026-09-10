@@ -6303,12 +6303,6 @@ impl serde::Serialize for TransactionPlannerRequest {
         if !self.outputs.is_empty() {
             len += 1;
         }
-        if !self.ibc_relay_actions.is_empty() {
-            len += 1;
-        }
-        if !self.ics20_withdrawals.is_empty() {
-            len += 1;
-        }
         if !self.host_withdrawals.is_empty() {
             len += 1;
         }
@@ -6338,12 +6332,6 @@ impl serde::Serialize for TransactionPlannerRequest {
         }
         if !self.outputs.is_empty() {
             struct_ser.serialize_field("outputs", &self.outputs)?;
-        }
-        if !self.ibc_relay_actions.is_empty() {
-            struct_ser.serialize_field("ibcRelayActions", &self.ibc_relay_actions)?;
-        }
-        if !self.ics20_withdrawals.is_empty() {
-            struct_ser.serialize_field("ics20Withdrawals", &self.ics20_withdrawals)?;
         }
         if !self.host_withdrawals.is_empty() {
             struct_ser.serialize_field("hostWithdrawals", &self.host_withdrawals)?;
@@ -6384,10 +6372,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
             "memo",
             "source",
             "outputs",
-            "ibc_relay_actions",
-            "ibcRelayActions",
-            "ics20_withdrawals",
-            "ics20Withdrawals",
             "host_withdrawals",
             "hostWithdrawals",
             "epoch_index",
@@ -6407,8 +6391,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
             Memo,
             Source,
             Outputs,
-            IbcRelayActions,
-            Ics20Withdrawals,
             HostWithdrawals,
             EpochIndex,
             Epoch,
@@ -6441,8 +6423,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                             "memo" => Ok(GeneratedField::Memo),
                             "source" => Ok(GeneratedField::Source),
                             "outputs" => Ok(GeneratedField::Outputs),
-                            "ibcRelayActions" | "ibc_relay_actions" => Ok(GeneratedField::IbcRelayActions),
-                            "ics20Withdrawals" | "ics20_withdrawals" => Ok(GeneratedField::Ics20Withdrawals),
                             "hostWithdrawals" | "host_withdrawals" => Ok(GeneratedField::HostWithdrawals),
                             "epochIndex" | "epoch_index" => Ok(GeneratedField::EpochIndex),
                             "epoch" => Ok(GeneratedField::Epoch),
@@ -6472,8 +6452,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                 let mut memo__ = None;
                 let mut source__ = None;
                 let mut outputs__ = None;
-                let mut ibc_relay_actions__ = None;
-                let mut ics20_withdrawals__ = None;
                 let mut host_withdrawals__ = None;
                 let mut epoch_index__ = None;
                 let mut epoch__ = None;
@@ -6506,18 +6484,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                                 return Err(serde::de::Error::duplicate_field("outputs"));
                             }
                             outputs__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::IbcRelayActions => {
-                            if ibc_relay_actions__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ibcRelayActions"));
-                            }
-                            ibc_relay_actions__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::Ics20Withdrawals => {
-                            if ics20_withdrawals__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ics20Withdrawals"));
-                            }
-                            ics20_withdrawals__ = Some(map_.next_value()?);
                         }
                         GeneratedField::HostWithdrawals => {
                             if host_withdrawals__.is_some() {
@@ -6569,8 +6535,6 @@ impl<'de> serde::Deserialize<'de> for TransactionPlannerRequest {
                     memo: memo__,
                     source: source__,
                     outputs: outputs__.unwrap_or_default(),
-                    ibc_relay_actions: ibc_relay_actions__.unwrap_or_default(),
-                    ics20_withdrawals: ics20_withdrawals__.unwrap_or_default(),
                     host_withdrawals: host_withdrawals__.unwrap_or_default(),
                     epoch_index: epoch_index__.unwrap_or_default(),
                     epoch: epoch__,

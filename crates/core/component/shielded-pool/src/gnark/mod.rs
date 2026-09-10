@@ -13,9 +13,9 @@ mod recovery_capsule_witness;
 mod recovery_capsule_witness_binary;
 #[cfg(all(feature = "prover", any(unix, windows)))]
 mod runtime;
-mod shielded_ics20_withdrawal;
-mod shielded_ics20_withdrawal_witness;
-mod shielded_ics20_withdrawal_witness_binary;
+mod shielded_withdrawal;
+mod shielded_withdrawal_witness;
+mod shielded_withdrawal_witness_binary;
 mod transfer;
 mod transfer_proof_result;
 mod transfer_witness;
@@ -35,11 +35,11 @@ pub use note_seizure::{
 };
 pub use note_seizure_witness::{NoteSeizureRecoveryWitness, NoteSeizureWitness};
 pub use recovery_capsule_witness::RecoveryCapsuleWitness;
-pub use shielded_ics20_withdrawal::{
-    decode_shielded_ics20_withdrawal_witness, encode_shielded_ics20_withdrawal_witness,
-    translate_shielded_ics20_withdrawal_proof_result,
+pub use shielded_withdrawal::{
+    decode_shielded_withdrawal_witness, encode_shielded_withdrawal_witness,
+    translate_shielded_withdrawal_proof_result,
 };
-pub use shielded_ics20_withdrawal_witness::ShieldedIcs20WithdrawalWitness;
+pub use shielded_withdrawal_witness::ShieldedWithdrawalWitness;
 pub use transfer::{
     decode_transfer_witness, encode_transfer_witness, translate_transfer_proof_result,
 };
@@ -56,11 +56,11 @@ mod soundness_fixture_tests {
 
     use crate::{
         gnark::{
-            encode_note_reshape_witness, encode_shielded_ics20_withdrawal_witness,
+            encode_note_reshape_witness, encode_shielded_withdrawal_witness,
             encode_transfer_witness,
         },
         test_proof_helpers::proof_test_helpers,
-        NoteReshapeFamilyId, ShieldedIcs20WithdrawalFamilyId,
+        NoteReshapeFamilyId, ShieldedWithdrawalFamilyId,
     };
 
     fn fixture_dir() -> PathBuf {
@@ -151,30 +151,30 @@ mod soundness_fixture_tests {
         );
     }
 
-    fn write_shielded_ics20_withdrawal_fixture() {
+    fn write_shielded_withdrawal_fixture() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x0000_0049_4353_3201);
         let (public, private) =
-            proof_test_helpers::build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng(
+            proof_test_helpers::build_shielded_withdrawal_roundtrip_inputs_with_rng(
                 &mut rng,
-                ShieldedIcs20WithdrawalFamilyId::Canonical,
+                ShieldedWithdrawalFamilyId::Canonical,
                 true,
             );
         write_fixture(
-            "shielded_ics20_withdrawal_witness.bin",
-            encode_shielded_ics20_withdrawal_witness(&public, &private)
-                .expect("encode shielded ICS-20 withdrawal witness"),
+            "shielded_withdrawal_witness.bin",
+            encode_shielded_withdrawal_witness(&public, &private)
+                .expect("encode shielded withdrawal witness"),
         );
     }
 
-    fn write_accumulating_shielded_ics20_withdrawal_fixtures() {
+    fn write_accumulating_shielded_withdrawal_fixtures() {
         for (name, seed, mode) in [
             (
-                "shielded_ics20_withdrawal_accumulator_origin_witness.bin",
+                "shielded_withdrawal_accumulator_origin_witness.bin",
                 0x4f52_4947_494e_0001,
                 proof_test_helpers::WithdrawalAccumulatorTestMode::Origin,
             ),
             (
-                "shielded_ics20_withdrawal_accumulator_continuation_witness.bin",
+                "shielded_withdrawal_accumulator_continuation_witness.bin",
                 0x434f_4e54_0000_0001,
                 proof_test_helpers::WithdrawalAccumulatorTestMode::Continuation {
                     prior_volume: 25,
@@ -182,43 +182,44 @@ mod soundness_fixture_tests {
             ),
         ] {
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-            let (public, private) = proof_test_helpers::build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng_and_mode(
-                &mut rng,
-                ShieldedIcs20WithdrawalFamilyId::Canonical,
-                true,
-                2,
-                mode,
-            );
+            let (public, private) =
+                proof_test_helpers::build_shielded_withdrawal_roundtrip_inputs_with_rng_and_mode(
+                    &mut rng,
+                    ShieldedWithdrawalFamilyId::Canonical,
+                    true,
+                    2,
+                    mode,
+                );
             write_fixture(
                 name,
-                encode_shielded_ics20_withdrawal_witness(&public, &private)
+                encode_shielded_withdrawal_witness(&public, &private)
                     .expect("encode accumulating withdrawal witness"),
             );
         }
     }
 
-    fn write_unregulated_shielded_ics20_withdrawal_fixture() {
+    fn write_unregulated_shielded_withdrawal_fixture() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x554e_5245_4757_4438);
         let (public, private) =
-            proof_test_helpers::build_shielded_ics20_withdrawal_roundtrip_inputs_with_rng_and_real_spends(
+            proof_test_helpers::build_shielded_withdrawal_roundtrip_inputs_with_rng_and_real_spends(
                 &mut rng,
-                ShieldedIcs20WithdrawalFamilyId::Canonical,
+                ShieldedWithdrawalFamilyId::Canonical,
                 false,
                 1,
             );
         write_fixture(
-            "shielded_ics20_withdrawal_unregulated_witness.bin",
-            encode_shielded_ics20_withdrawal_witness(&public, &private)
+            "shielded_withdrawal_unregulated_witness.bin",
+            encode_shielded_withdrawal_witness(&public, &private)
                 .expect("encode unregulated optional-dummy withdrawal witness"),
         );
     }
 
     #[test]
     #[ignore = "debug: refresh Rust-emitted withdrawal gnark soundness fixture"]
-    fn bless_shielded_ics20_withdrawal_witness_fixture() {
-        write_shielded_ics20_withdrawal_fixture();
-        write_unregulated_shielded_ics20_withdrawal_fixture();
-        write_accumulating_shielded_ics20_withdrawal_fixtures();
+    fn bless_shielded_withdrawal_witness_fixture() {
+        write_shielded_withdrawal_fixture();
+        write_unregulated_shielded_withdrawal_fixture();
+        write_accumulating_shielded_withdrawal_fixtures();
     }
 
     #[test]
@@ -281,7 +282,7 @@ mod soundness_fixture_tests {
             );
         }
 
-        write_shielded_ics20_withdrawal_fixture();
+        write_shielded_withdrawal_fixture();
     }
 }
 
@@ -311,8 +312,8 @@ pub fn require_proof_test_runtime(family: ProofTestFamily) -> anyhow::Result<()>
         ProofTestFamily::NoteReshape(family) => note_reshape::note_reshape_family_config(family)
             .require_test_prerequisites(family.proving_key_bytes()),
         ProofTestFamily::Withdrawal => {
-            let family = crate::ShieldedIcs20WithdrawalFamilyId::Canonical;
-            shielded_ics20_withdrawal::shielded_ics20_withdrawal_family_config(family)
+            let family = crate::ShieldedWithdrawalFamilyId::Canonical;
+            shielded_withdrawal::shielded_withdrawal_family_config(family)
                 .require_test_prerequisites(family.proving_key_bytes())
         }
     }
@@ -325,14 +326,14 @@ pub(crate) use transfer::GnarkTransferClient;
 pub(crate) use note_reshape::GnarkNoteReshapeClient;
 
 #[cfg(all(feature = "prover", any(unix, windows)))]
-pub(crate) use shielded_ics20_withdrawal::GnarkShieldedIcs20WithdrawalClient;
+pub(crate) use shielded_withdrawal::GnarkShieldedWithdrawalClient;
 
 /// Explicitly selected proving capability; verification does not require one.
 #[cfg(all(feature = "prover", any(unix, windows)))]
 pub enum ProverCapability {
     Transfer,
     NoteReshape(crate::NoteReshapeFamilyId),
-    Withdrawal(crate::ShieldedIcs20WithdrawalFamilyId),
+    Withdrawal(crate::ShieldedWithdrawalFamilyId),
     NoteSeizure,
 }
 
@@ -343,7 +344,7 @@ pub fn initialize_prover(capability: ProverCapability) -> anyhow::Result<()> {
         ProverCapability::Transfer => transfer::resolved_configuration()?,
         ProverCapability::NoteReshape(family) => note_reshape::resolved_configuration(family)?,
         ProverCapability::Withdrawal(family) => {
-            shielded_ics20_withdrawal::resolved_configuration(family)?
+            shielded_withdrawal::resolved_configuration(family)?
         }
         ProverCapability::NoteSeizure => note_seizure::resolved_configuration()?,
     };
