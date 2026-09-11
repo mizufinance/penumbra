@@ -126,6 +126,13 @@ fn sharing_preview(statement: &sdk::DisclosureStatement) -> SharingPreview<'_> {
     }
 }
 
+fn report_rejection<T>(result: Result<T>) -> Result<T> {
+    if result.is_err() {
+        println!("{}", serde_json::json!({"status":"rejected"}));
+    }
+    result
+}
+
 fn read_bounded(path: &Utf8Path, limit: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     if path.as_str() == "-" {
@@ -408,12 +415,16 @@ impl DisclosureCmd {
                 node,
                 transactions,
             } => {
-                let selection: sdk::AuditSelection =
-                    serde_json::from_slice(&read_bounded(selection, sdk::MAX_DOCUMENT_BYTES)?)?;
-                ensure!(
-                    selection.version == 2 && selection.reference.height > 0,
-                    "invalid audit selection"
-                );
+                let bytes = read_bounded(selection, sdk::MAX_DOCUMENT_BYTES)?;
+                let selection: sdk::AuditSelection = report_rejection((|| {
+                    let selection: sdk::AuditSelection = serde_json::from_slice(&bytes)?;
+                    ensure!(
+                        selection.version == 2 && selection.reference.height > 0,
+                        "invalid audit selection"
+                    );
+                    selection.access.key_scope()?;
+                    Ok(selection)
+                })())?;
                 let (chain, blocks) =
                     accepted_blocks(node, [selection.reference.height].into_iter().collect())
                         .await?;
@@ -423,17 +434,17 @@ impl DisclosureCmd {
                         serde_json::from_slice(&read_bounded(path, sdk::MAX_PACKAGE_BYTES)?)?;
                     ensure!(encoded.len() == 1, "expected one indexed audit transaction");
                     let raw = base64::engine::general_purpose::STANDARD.decode(&encoded[0])?;
-                    sdk::verify_audit_candidate(
+                    report_rejection(sdk::verify_audit_candidate(
                         &selection,
                         blocks.first().context("accepted block unavailable")?,
                         &raw,
-                    )?;
+                    ))?;
                 }
-                let accepted = sdk::accepted_audit_ciphertext(
+                let accepted = report_rejection(sdk::accepted_audit_ciphertext(
                     selection,
                     &chain,
                     blocks.first().context("accepted block unavailable")?,
-                )?;
+                ))?;
                 println!("{}", serde_json::to_string(&accepted)?);
             }
             Self::ValidateRequest { request } => {
