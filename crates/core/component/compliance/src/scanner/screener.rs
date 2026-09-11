@@ -167,6 +167,7 @@ mod tests {
     ) -> TransferComplianceCiphertext {
         encrypt_transfer(
             &mut OsRng,
+            ring_pk,
             &derive_ack(ring_pk, sender_address),
             &derive_ack(ring_pk, receiver_address),
             dk_pub,

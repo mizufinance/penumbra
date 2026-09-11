@@ -1180,6 +1180,7 @@ mod tests {
             &decaf377::Element::GENERATOR,
             &decaf377::Element::GENERATOR,
             &decaf377::Element::GENERATOR,
+            &decaf377::Element::GENERATOR,
             &receiver,
             &sender,
             Value {

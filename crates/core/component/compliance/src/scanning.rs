@@ -204,6 +204,7 @@ mod tests {
         let output_core_salt = decaf377::Fq::from(2u64);
         let ciphertext = encrypt_transfer(
             &mut OsRng,
+            &ring_pk,
             &derive_ack(&ring_pk, &sender_address),
             &derive_ack(&ring_pk, &receiver_address),
             &dk_pub,
@@ -252,6 +253,7 @@ mod tests {
         let output_core_salt = decaf377::Fq::from(3u64);
         let ciphertext = encrypt_transfer(
             &mut OsRng,
+            &ring_pk,
             &derive_ack(&ring_pk, &sender_address),
             &derive_ack(&ring_pk, &receiver_address),
             &dk_pub,

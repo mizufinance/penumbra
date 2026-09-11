@@ -49,6 +49,7 @@ pub use structs::{
     KEY_BYTES,
 };
 
+pub mod master_wrapping;
 pub mod transfer;
 pub use transfer::{
     derive_transfer_salt, encrypt_transfer, TransferComplianceCiphertext,
@@ -460,6 +461,7 @@ mod tests {
 
         let ciphertext = encrypt_transfer(
             &mut OsRng,
+            &ring_pk,
             &sender_ack,
             &receiver_ack,
             &issuer_dk_pub,
@@ -532,6 +534,7 @@ mod tests {
 
         let ciphertext = encrypt_transfer(
             &mut OsRng,
+            &ring_pk,
             &sender_ack,
             &receiver_ack,
             &issuer_dk_pub,

@@ -75,6 +75,7 @@ type TransferComplianceExtFields struct {
 }
 
 type TransferComplianceFields struct {
+	MasterWrappings     [3]frontend.Variable
 	TransferNonceRoot   frontend.Variable
 	DetectionCiphertext [compliance.TransferDetectionFQCount]frontend.Variable
 	Metadata            TransferComplianceMetadataFields

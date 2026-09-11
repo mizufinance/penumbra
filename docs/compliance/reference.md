@@ -8,17 +8,27 @@ See `flow.md` for the end-to-end lifecycle.
 Only the receiver `TransferOutputBody` carries compliance bytes. Transfer
 inputs and the change output must not carry compliance data.
 
+General audits select amount (output CORE), sender (output EXT), or receiver
+(sender EXT). Each master wrapping reuses that payload's encryption key and EPK.
+Its mask is Poseidon377 hash_3 under `shieldd.transfer.master_wrapping.v1`, with
+inputs `(position, Compress(shared), Compress(EPK))`; positions are 0, 1, and 2.
+The shared point uses the registered ring key for ordinary transactions and the
+issuer DK for flagged transactions. All three fields are always present and
+constrained by the Transfer proof. Named-person audits use the existing child
+wrappings. Address results are components, not full canonical address strings.
+
 ```text
-TransferComplianceCiphertext: 704 bytes
+TransferComplianceCiphertext: 800 bytes
   0..128    four compressed EPKs
              sender_core, sender_ext, output_core, output_ext
   128..256  four canonical Fq c2 values in the same order
-  256..320  sender-core and output-core key confirmations
-  320..448  four-Fq detection ciphertext
-  448..480  sender_core ciphertext: one Fq
-  480..576  sender_ext ciphertext: three Fq
-  576..608  output_core ciphertext: one Fq
-  608..704  output_ext ciphertext: three Fq
+  256..352  three master wrappings: amount, sender, receiver
+  352..416  sender-core and output-core key confirmations
+  416..544  four-Fq detection ciphertext
+  544..576  sender_core ciphertext: one Fq
+  576..672  sender_ext ciphertext: three Fq
+  672..704  output_core ciphertext: one Fq
+  704..800  output_ext ciphertext: three Fq
 
 TransferComplianceMetadata: 264 bytes
   0..32     ring_id_hash Fq

@@ -1215,6 +1215,22 @@ func TestTransferCircuitRejectsComplianceTierMutations(t *testing.T) {
 	}
 }
 
+func TestTransferCircuitRejectsMasterWrappingMutations(t *testing.T) {
+	for position := 0; position < 3; position++ {
+		for _, stale := range []bool{false, true} {
+			t.Run(fmt.Sprintf("value_%d_stale_%t", position, stale), func(t *testing.T) {
+				assertTransferMutationRejected(t, transferMutation{
+					name: "master wrapping", preserveStaleStatement: stale,
+					mutate: func(t *testing.T, w *abi.TransferWitnessBinary, c *circuits.TransferCircuit) {
+						w.MasterWrappings[position] = addFieldElementBytes(t, w.MasterWrappings[position], big.NewInt(1))
+						c.Compliance.MasterWrappings[position] = primitives.LittleEndianBytesToBigInt(w.MasterWrappings[position][:]).String()
+					},
+				})
+			})
+		}
+	}
+}
+
 func TestTransferCircuitRejectsEveryDetectionCiphertextMutation(t *testing.T) {
 	for ciphertextIndex := 0; ciphertextIndex < compliance.TransferDetectionFQCount; ciphertextIndex++ {
 		ciphertextIndex := ciphertextIndex

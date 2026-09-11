@@ -230,6 +230,9 @@ func newTransferComplianceFields(
 		OutputCore:  outputCore,
 		OutputExt:   outputExt,
 	}
+	for i := range witness.MasterWrappings {
+		fields.MasterWrappings[i] = fqString(witness.MasterWrappings[i])
+	}
 	for i := range witness.DetectionCiphertext {
 		fields.DetectionCiphertext[i] = fqString(witness.DetectionCiphertext[i])
 	}

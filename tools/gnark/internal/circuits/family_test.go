@@ -178,7 +178,7 @@ func compileCircuitFamilies() []struct {
 		{
 			name:    "transfer",
 			circuit: func() frontend.Circuit { return circuits.NewTransferCircuit() },
-			stats:   circuitStats{constraints: 163396, public: 2, secret: 518, internal: 150384},
+			stats:   circuitStats{constraints: 176187, public: 2, secret: 521, internal: 162143},
 		},
 		{
 			name:    "note_reshape8x1",

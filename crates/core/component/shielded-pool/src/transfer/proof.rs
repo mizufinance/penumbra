@@ -39,6 +39,7 @@ pub struct TransferComplianceCiphertextPublic {
 
 #[derive(Clone, Debug)]
 pub struct TransferCompliancePublic {
+    pub master_wrappings: [Fq; 3],
     pub detection_ciphertext: Vec<Fq>,
     pub metadata: TransferComplianceMetadata,
     pub sender_core_key_confirmation: Fq,

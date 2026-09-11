@@ -78,10 +78,14 @@ without adding spendable notes.
 
 `audit-ciphertext` resolves a canonical compliance tier from committed node data
 without opening a wallet. Its selection contains `version: 1`, `chain_id`, an
-ordinary Transfer `reference`, and `tier` (`sender_core`, `sender_ext`,
-`output_core`, or `output_ext`). The reference uses receiver output index zero.
-The result contains the accepted ciphertext, metadata, and selected ephemeral
-key. It is not a portable inclusion proof or an authorization to perform PRE.
+ordinary Transfer `reference`, and `access`. General access is
+`{"mode":"general","value":"amount"}`, with `sender` and `receiver` as the other
+values. Named-person access is `{"mode":"named_person","tier":"sender_core",
+"address":"..."}`; tiers are `sender_core`, `sender_ext`, `output_core`, and
+`output_ext`. The reference uses receiver output index zero. The result contains
+the accepted ciphertext, metadata, selected ephemeral key, wrapping, and canonical
+address derivation when applicable. It is not a portable inclusion proof or an
+authorization to perform PRE.
 
 ## Spending-authority control
 

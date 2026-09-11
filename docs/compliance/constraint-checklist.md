@@ -121,7 +121,7 @@ nullifier, and value constraints are tracked in
 
 ### Wire Shape
 
-- Only the receiver output may carry the 704-byte ciphertext and 264-byte
+- Only the receiver output may carry the 800-byte ciphertext and 264-byte
   metadata.
 - Inputs and the change output carry neither.
 - Point and Fq decoders reject noncanonical values and wrong lengths.

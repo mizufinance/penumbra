@@ -1018,6 +1018,7 @@ mod tests {
                     output_ext_epk: decaf377::Element::GENERATOR,
                     sender_core_c2: decaf377::Fq::from(1u64),
                     sender_ext_c2: decaf377::Fq::from(2u64),
+                    master_wrappings: [decaf377::Fq::from(0u64); 3],
                     output_core_c2: decaf377::Fq::from(3u64),
                     output_ext_c2: decaf377::Fq::from(4u64),
                     sender_core_key_confirmation: decaf377::Fq::from(5u64),

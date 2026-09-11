@@ -155,6 +155,11 @@ pub(crate) fn build_transfer_compliance(
         *shieldd_sdk_compliance::UNREGULATED_SINK_DK_PUB
     };
 
+    let ring_pk = if context.witness.asset.is_regulated {
+        asset_indexed_leaf.ring.ring_pk
+    } else {
+        *shieldd_sdk_compliance::UNREGULATED_SINK_RING_PK
+    };
     let sender_ack = sender_leaf.capk;
     let receiver_ack = receiver_leaf.capk;
 
@@ -167,6 +172,7 @@ pub(crate) fn build_transfer_compliance(
 
     let encryption = encrypt_transfer(
         &mut rng,
+        &ring_pk,
         &sender_ack,
         &receiver_ack,
         &dk_pub,
@@ -345,6 +351,7 @@ pub(crate) fn transfer_compliance_public_from_parts(
         sender_ext_c2,
         output_core_c2,
         output_ext_c2,
+        master_wrappings,
         sender_core_key_confirmation,
         output_core_key_confirmation,
         detection_ciphertext,
@@ -357,6 +364,7 @@ pub(crate) fn transfer_compliance_public_from_parts(
     Ok(TransferCompliancePublic {
         detection_ciphertext: detection_ciphertext.to_vec(),
         metadata: metadata.clone(),
+        master_wrappings,
         sender_core_key_confirmation,
         output_core_key_confirmation,
         sender_core: TransferComplianceCiphertextPublic {

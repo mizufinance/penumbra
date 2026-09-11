@@ -108,7 +108,7 @@ type spendSharedSecretsProfileCircuit struct {
 }
 
 func (c *spendSharedSecretsProfileCircuit) Define(api frontend.API) error {
-	_, _, _, err := compliance.DeriveSharedSecretsSpend(
+	_, _, _, _, err := compliance.DeriveSharedSecretsSpend(
 		api,
 		c.ESK,
 		gnarkte.Point{X: c.AckX, Y: c.AckY},
@@ -170,7 +170,7 @@ type transferAmountCiphertextProfileCircuit struct {
 }
 
 func (c *transferAmountCiphertextProfileCircuit) Define(api frontend.API) error {
-	return compliance.VerifyPoseidonEncryptionTransferAmount(
+	_, err := compliance.VerifyPoseidonEncryptionTransferAmount(
 		api,
 		gnarkte.Point{X: c.SharedSecretX, Y: c.SharedSecretY},
 		c.C2,
@@ -180,6 +180,7 @@ func (c *transferAmountCiphertextProfileCircuit) Define(api frontend.API) error 
 		c.Amount,
 		[compliance.TransferCoreCiphertextFQCount]frontend.Variable{c.Ciphertext0},
 	)
+	return err
 }
 
 type transferAddressCiphertextProfileCircuit struct {
@@ -194,7 +195,7 @@ type transferAddressCiphertextProfileCircuit struct {
 }
 
 func (c *transferAddressCiphertextProfileCircuit) Define(api frontend.API) error {
-	return compliance.VerifyPoseidonEncryptionTransferAddress(
+	_, err := compliance.VerifyPoseidonEncryptionTransferAddress(
 		api,
 		gnarkte.Point{X: c.SharedSecretX, Y: c.SharedSecretY},
 		c.C2,
@@ -206,6 +207,7 @@ func (c *transferAddressCiphertextProfileCircuit) Define(api frontend.API) error
 			c.Ciphertext2,
 		},
 	)
+	return err
 }
 
 type transferSharedProfileCircuit struct {

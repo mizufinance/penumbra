@@ -55,6 +55,9 @@ impl TransferWitness {
         encode_vec_32(&mut buf, &self.detection_ciphertext)?;
         put_bytes(&mut buf, &self.sender_core_key_confirmation);
         put_bytes(&mut buf, &self.output_core_key_confirmation);
+        for wrapping in &self.master_wrappings {
+            put_bytes(&mut buf, wrapping);
+        }
         put_bytes(&mut buf, &self.ring_id_hash);
         put_bytes(&mut buf, &self.policy_id_hash);
         put_bytes(&mut buf, &self.resource_hash);
@@ -131,6 +134,11 @@ impl TransferWitness {
             detection_ciphertext: cursor.read_vec_32()?,
             sender_core_key_confirmation: cursor.read_fixed::<32>()?,
             output_core_key_confirmation: cursor.read_fixed::<32>()?,
+            master_wrappings: [
+                cursor.read_fixed::<32>()?,
+                cursor.read_fixed::<32>()?,
+                cursor.read_fixed::<32>()?,
+            ],
             ring_id_hash: cursor.read_fixed::<32>()?,
             policy_id_hash: cursor.read_fixed::<32>()?,
             resource_hash: cursor.read_fixed::<32>()?,

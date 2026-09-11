@@ -5,11 +5,11 @@
     "n_in": 2,
     "n_out": 2
   },
-  "nb_constraints": 163396,
+  "nb_constraints": 176187,
   "nb_public_variables": 2,
-  "nb_secret_variables": 518,
-  "nb_internal_variables": 150384,
-  "sr1cs_sha256_hex": "9c7f003980d783133db6b82e4e30fd3444d1fe37bf80fd3da4c6a227d0046ff7",
+  "nb_secret_variables": 521,
+  "nb_internal_variables": 162143,
+  "sr1cs_sha256_hex": "584d70e86fd9b232d8926e3612599c636c47de93d4c557895903e03dfb9acc52",
   "witness_wires": [
     {
       "wire_id": 1,
@@ -853,2274 +853,2292 @@
     },
     {
       "wire_id": 141,
-      "path": "Compliance_TransferNonceRoot",
+      "path": "Compliance_MasterWrappings_0",
       "visibility": "secret",
-      "constraint_rows": 20
+      "constraint_rows": 3
     },
     {
       "wire_id": 142,
-      "path": "Compliance_DetectionCiphertext_0",
+      "path": "Compliance_MasterWrappings_1",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 143,
-      "path": "Compliance_DetectionCiphertext_1",
+      "path": "Compliance_MasterWrappings_2",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 144,
-      "path": "Compliance_DetectionCiphertext_2",
+      "path": "Compliance_TransferNonceRoot",
       "visibility": "secret",
-      "constraint_rows": 3
+      "constraint_rows": 20
     },
     {
       "wire_id": 145,
-      "path": "Compliance_DetectionCiphertext_3",
+      "path": "Compliance_DetectionCiphertext_0",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 146,
-      "path": "Compliance_Metadata_RingIDHash",
+      "path": "Compliance_DetectionCiphertext_1",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 147,
-      "path": "Compliance_Metadata_PolicyIDHash",
+      "path": "Compliance_DetectionCiphertext_2",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 148,
-      "path": "Compliance_Metadata_ResourceHash",
+      "path": "Compliance_DetectionCiphertext_3",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 149,
-      "path": "Compliance_Metadata_PermissionHash",
+      "path": "Compliance_Metadata_RingIDHash",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 150,
-      "path": "Compliance_Metadata_TargetTimestamp",
+      "path": "Compliance_Metadata_PolicyIDHash",
       "visibility": "secret",
-      "constraint_rows": 1
+      "constraint_rows": 3
     },
     {
       "wire_id": 151,
-      "path": "Compliance_Metadata_SenderCoreSalt",
+      "path": "Compliance_Metadata_ResourceHash",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 152,
-      "path": "Compliance_Metadata_SenderExtSalt",
+      "path": "Compliance_Metadata_PermissionHash",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 153,
-      "path": "Compliance_Metadata_OutputCoreSalt",
+      "path": "Compliance_Metadata_TargetTimestamp",
       "visibility": "secret",
-      "constraint_rows": 3
+      "constraint_rows": 1
     },
     {
       "wire_id": 154,
-      "path": "Compliance_Metadata_OutputExtSalt",
+      "path": "Compliance_Metadata_SenderCoreSalt",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 155,
+      "path": "Compliance_Metadata_SenderExtSalt",
+      "visibility": "secret",
+      "constraint_rows": 3
+    },
+    {
+      "wire_id": 156,
+      "path": "Compliance_Metadata_OutputCoreSalt",
+      "visibility": "secret",
+      "constraint_rows": 3
+    },
+    {
+      "wire_id": 157,
+      "path": "Compliance_Metadata_OutputExtSalt",
+      "visibility": "secret",
+      "constraint_rows": 3
+    },
+    {
+      "wire_id": 158,
       "path": "Compliance_SenderRCore",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 156,
+      "wire_id": 159,
       "path": "Compliance_SenderRExt",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 157,
+      "wire_id": 160,
       "path": "Compliance_OutputRCore",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 158,
+      "wire_id": 161,
       "path": "Compliance_OutputRExt",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 159,
+      "wire_id": 162,
       "path": "Compliance_SenderCore_Epk_X",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 160,
+      "wire_id": 163,
       "path": "Compliance_SenderCore_Epk_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 161,
+      "wire_id": 164,
       "path": "Compliance_SenderCore_C2",
       "visibility": "secret",
       "constraint_rows": 6
     },
     {
-      "wire_id": 162,
+      "wire_id": 165,
       "path": "Compliance_SenderCore_KeyConfirmation",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 163,
+      "wire_id": 166,
       "path": "Compliance_SenderCore_Ciphertext_0",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 164,
+      "wire_id": 167,
       "path": "Compliance_SenderExt_Epk_X",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 165,
+      "wire_id": 168,
       "path": "Compliance_SenderExt_Epk_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 166,
+      "wire_id": 169,
       "path": "Compliance_SenderExt_C2",
       "visibility": "secret",
-      "constraint_rows": 8
+      "constraint_rows": 9
     },
     {
-      "wire_id": 167,
+      "wire_id": 170,
       "path": "Compliance_SenderExt_Ciphertext_0",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 168,
+      "wire_id": 171,
       "path": "Compliance_SenderExt_Ciphertext_1",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 169,
+      "wire_id": 172,
       "path": "Compliance_SenderExt_Ciphertext_2",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 170,
+      "wire_id": 173,
       "path": "Compliance_OutputCore_Epk_X",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 171,
+      "wire_id": 174,
       "path": "Compliance_OutputCore_Epk_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 172,
-      "path": "Compliance_OutputCore_C2",
-      "visibility": "secret",
-      "constraint_rows": 6
-    },
-    {
-      "wire_id": 173,
-      "path": "Compliance_OutputCore_KeyConfirmation",
-      "visibility": "secret",
-      "constraint_rows": 3
-    },
-    {
-      "wire_id": 174,
-      "path": "Compliance_OutputCore_Ciphertext_0",
-      "visibility": "secret",
-      "constraint_rows": 3
-    },
-    {
       "wire_id": 175,
-      "path": "Compliance_OutputExt_Epk_X",
+      "path": "Compliance_OutputCore_C2",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
       "wire_id": 176,
-      "path": "Compliance_OutputExt_Epk_Y",
+      "path": "Compliance_OutputCore_KeyConfirmation",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 177,
-      "path": "Compliance_OutputExt_C2",
-      "visibility": "secret",
-      "constraint_rows": 8
-    },
-    {
-      "wire_id": 178,
-      "path": "Compliance_OutputExt_Ciphertext_0",
+      "path": "Compliance_OutputCore_Ciphertext_0",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
+      "wire_id": 178,
+      "path": "Compliance_OutputExt_Epk_X",
+      "visibility": "secret",
+      "constraint_rows": 7
+    },
+    {
       "wire_id": 179,
-      "path": "Compliance_OutputExt_Ciphertext_1",
+      "path": "Compliance_OutputExt_Epk_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 180,
-      "path": "Compliance_OutputExt_Ciphertext_2",
+      "path": "Compliance_OutputExt_C2",
       "visibility": "secret",
-      "constraint_rows": 3
+      "constraint_rows": 9
     },
     {
       "wire_id": 181,
-      "path": "RequiredSpend_Nullifier",
+      "path": "Compliance_OutputExt_Ciphertext_0",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 182,
-      "path": "RequiredSpend_RK_X",
+      "path": "Compliance_OutputExt_Ciphertext_1",
       "visibility": "secret",
-      "constraint_rows": 6
+      "constraint_rows": 3
     },
     {
       "wire_id": 183,
-      "path": "RequiredSpend_RK_Y",
+      "path": "Compliance_OutputExt_Ciphertext_2",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
       "wire_id": 184,
+      "path": "RequiredSpend_Nullifier",
+      "visibility": "secret",
+      "constraint_rows": 3
+    },
+    {
+      "wire_id": 185,
+      "path": "RequiredSpend_RK_X",
+      "visibility": "secret",
+      "constraint_rows": 6
+    },
+    {
+      "wire_id": 186,
+      "path": "RequiredSpend_RK_Y",
+      "visibility": "secret",
+      "constraint_rows": 3
+    },
+    {
+      "wire_id": 187,
       "path": "RequiredSpend_Note_Blinding",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 185,
+      "wire_id": 188,
       "path": "RequiredSpend_Note_Amount",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 186,
+      "wire_id": 189,
       "path": "RequiredSpend_Note_RecoveryCommitment",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 187,
+      "wire_id": 190,
       "path": "RequiredSpend_Note_AssetID",
       "visibility": "secret",
       "constraint_rows": 23
     },
     {
-      "wire_id": 188,
+      "wire_id": 191,
       "path": "RequiredSpend_StateProof_Position",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 189,
+      "wire_id": 192,
       "path": "RequiredSpend_StateProof_Path_0_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 190,
+      "wire_id": 193,
       "path": "RequiredSpend_StateProof_Path_0_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 191,
+      "wire_id": 194,
       "path": "RequiredSpend_StateProof_Path_0_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 192,
+      "wire_id": 195,
       "path": "RequiredSpend_StateProof_Path_1_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 193,
+      "wire_id": 196,
       "path": "RequiredSpend_StateProof_Path_1_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 194,
+      "wire_id": 197,
       "path": "RequiredSpend_StateProof_Path_1_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 195,
+      "wire_id": 198,
       "path": "RequiredSpend_StateProof_Path_2_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 196,
+      "wire_id": 199,
       "path": "RequiredSpend_StateProof_Path_2_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 197,
+      "wire_id": 200,
       "path": "RequiredSpend_StateProof_Path_2_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 198,
+      "wire_id": 201,
       "path": "RequiredSpend_StateProof_Path_3_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 199,
+      "wire_id": 202,
       "path": "RequiredSpend_StateProof_Path_3_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 200,
+      "wire_id": 203,
       "path": "RequiredSpend_StateProof_Path_3_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 201,
+      "wire_id": 204,
       "path": "RequiredSpend_StateProof_Path_4_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 202,
+      "wire_id": 205,
       "path": "RequiredSpend_StateProof_Path_4_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 203,
+      "wire_id": 206,
       "path": "RequiredSpend_StateProof_Path_4_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 204,
+      "wire_id": 207,
       "path": "RequiredSpend_StateProof_Path_5_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 205,
+      "wire_id": 208,
       "path": "RequiredSpend_StateProof_Path_5_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 206,
+      "wire_id": 209,
       "path": "RequiredSpend_StateProof_Path_5_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 207,
+      "wire_id": 210,
       "path": "RequiredSpend_StateProof_Path_6_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 208,
+      "wire_id": 211,
       "path": "RequiredSpend_StateProof_Path_6_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 209,
+      "wire_id": 212,
       "path": "RequiredSpend_StateProof_Path_6_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 210,
+      "wire_id": 213,
       "path": "RequiredSpend_StateProof_Path_7_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 211,
+      "wire_id": 214,
       "path": "RequiredSpend_StateProof_Path_7_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 212,
+      "wire_id": 215,
       "path": "RequiredSpend_StateProof_Path_7_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 213,
+      "wire_id": 216,
       "path": "RequiredSpend_StateProof_Path_8_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 214,
+      "wire_id": 217,
       "path": "RequiredSpend_StateProof_Path_8_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 215,
+      "wire_id": 218,
       "path": "RequiredSpend_StateProof_Path_8_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 216,
+      "wire_id": 219,
       "path": "RequiredSpend_StateProof_Path_9_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 217,
+      "wire_id": 220,
       "path": "RequiredSpend_StateProof_Path_9_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 218,
+      "wire_id": 221,
       "path": "RequiredSpend_StateProof_Path_9_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 219,
+      "wire_id": 222,
       "path": "RequiredSpend_StateProof_Path_10_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 220,
+      "wire_id": 223,
       "path": "RequiredSpend_StateProof_Path_10_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 221,
+      "wire_id": 224,
       "path": "RequiredSpend_StateProof_Path_10_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 222,
+      "wire_id": 225,
       "path": "RequiredSpend_StateProof_Path_11_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 223,
+      "wire_id": 226,
       "path": "RequiredSpend_StateProof_Path_11_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 224,
+      "wire_id": 227,
       "path": "RequiredSpend_StateProof_Path_11_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 225,
+      "wire_id": 228,
       "path": "RequiredSpend_StateProof_Path_12_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 226,
+      "wire_id": 229,
       "path": "RequiredSpend_StateProof_Path_12_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 227,
+      "wire_id": 230,
       "path": "RequiredSpend_StateProof_Path_12_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 228,
+      "wire_id": 231,
       "path": "RequiredSpend_StateProof_Path_13_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 229,
+      "wire_id": 232,
       "path": "RequiredSpend_StateProof_Path_13_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 230,
+      "wire_id": 233,
       "path": "RequiredSpend_StateProof_Path_13_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 231,
+      "wire_id": 234,
       "path": "RequiredSpend_StateProof_Path_14_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 232,
+      "wire_id": 235,
       "path": "RequiredSpend_StateProof_Path_14_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 233,
+      "wire_id": 236,
       "path": "RequiredSpend_StateProof_Path_14_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 234,
+      "wire_id": 237,
       "path": "RequiredSpend_StateProof_Path_15_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 235,
+      "wire_id": 238,
       "path": "RequiredSpend_StateProof_Path_15_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 236,
+      "wire_id": 239,
       "path": "RequiredSpend_StateProof_Path_15_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 237,
+      "wire_id": 240,
       "path": "RequiredSpend_StateProof_Path_16_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 238,
+      "wire_id": 241,
       "path": "RequiredSpend_StateProof_Path_16_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 239,
+      "wire_id": 242,
       "path": "RequiredSpend_StateProof_Path_16_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 240,
+      "wire_id": 243,
       "path": "RequiredSpend_StateProof_Path_17_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 241,
+      "wire_id": 244,
       "path": "RequiredSpend_StateProof_Path_17_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 242,
+      "wire_id": 245,
       "path": "RequiredSpend_StateProof_Path_17_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 243,
+      "wire_id": 246,
       "path": "RequiredSpend_StateProof_Path_18_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 244,
+      "wire_id": 247,
       "path": "RequiredSpend_StateProof_Path_18_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 245,
+      "wire_id": 248,
       "path": "RequiredSpend_StateProof_Path_18_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 246,
+      "wire_id": 249,
       "path": "RequiredSpend_StateProof_Path_19_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 247,
+      "wire_id": 250,
       "path": "RequiredSpend_StateProof_Path_19_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 248,
+      "wire_id": 251,
       "path": "RequiredSpend_StateProof_Path_19_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 249,
+      "wire_id": 252,
       "path": "RequiredSpend_StateProof_Path_20_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 250,
+      "wire_id": 253,
       "path": "RequiredSpend_StateProof_Path_20_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 251,
+      "wire_id": 254,
       "path": "RequiredSpend_StateProof_Path_20_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 252,
+      "wire_id": 255,
       "path": "RequiredSpend_StateProof_Path_21_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 253,
+      "wire_id": 256,
       "path": "RequiredSpend_StateProof_Path_21_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 254,
+      "wire_id": 257,
       "path": "RequiredSpend_StateProof_Path_21_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 255,
+      "wire_id": 258,
       "path": "RequiredSpend_StateProof_Path_22_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 256,
+      "wire_id": 259,
       "path": "RequiredSpend_StateProof_Path_22_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 257,
+      "wire_id": 260,
       "path": "RequiredSpend_StateProof_Path_22_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 258,
+      "wire_id": 261,
       "path": "RequiredSpend_StateProof_Path_23_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 259,
+      "wire_id": 262,
       "path": "RequiredSpend_StateProof_Path_23_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 260,
+      "wire_id": 263,
       "path": "RequiredSpend_StateProof_Path_23_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 261,
+      "wire_id": 264,
       "path": "RequiredSpend_AuthRandomizer",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 262,
+      "wire_id": 265,
       "path": "RequiredSpend_HistoryRequired",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 263,
+      "wire_id": 266,
       "path": "OptionalSpend_Nullifier",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 264,
+      "wire_id": 267,
       "path": "OptionalSpend_RK_X",
       "visibility": "secret",
       "constraint_rows": 6
     },
     {
-      "wire_id": 265,
+      "wire_id": 268,
       "path": "OptionalSpend_RK_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 266,
+      "wire_id": 269,
       "path": "OptionalSpend_Note_Blinding",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 267,
+      "wire_id": 270,
       "path": "OptionalSpend_Note_Amount",
       "visibility": "secret",
       "constraint_rows": 5
     },
     {
-      "wire_id": 268,
+      "wire_id": 271,
       "path": "OptionalSpend_Note_RecoveryCommitment",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 269,
+      "wire_id": 272,
       "path": "OptionalSpend_StateProof_Position",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 270,
+      "wire_id": 273,
       "path": "OptionalSpend_StateProof_Path_0_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 271,
+      "wire_id": 274,
       "path": "OptionalSpend_StateProof_Path_0_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 272,
+      "wire_id": 275,
       "path": "OptionalSpend_StateProof_Path_0_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 273,
+      "wire_id": 276,
       "path": "OptionalSpend_StateProof_Path_1_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 274,
+      "wire_id": 277,
       "path": "OptionalSpend_StateProof_Path_1_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 275,
+      "wire_id": 278,
       "path": "OptionalSpend_StateProof_Path_1_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 276,
+      "wire_id": 279,
       "path": "OptionalSpend_StateProof_Path_2_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 277,
+      "wire_id": 280,
       "path": "OptionalSpend_StateProof_Path_2_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 278,
+      "wire_id": 281,
       "path": "OptionalSpend_StateProof_Path_2_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 279,
+      "wire_id": 282,
       "path": "OptionalSpend_StateProof_Path_3_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 280,
+      "wire_id": 283,
       "path": "OptionalSpend_StateProof_Path_3_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 281,
+      "wire_id": 284,
       "path": "OptionalSpend_StateProof_Path_3_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 282,
+      "wire_id": 285,
       "path": "OptionalSpend_StateProof_Path_4_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 283,
+      "wire_id": 286,
       "path": "OptionalSpend_StateProof_Path_4_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 284,
+      "wire_id": 287,
       "path": "OptionalSpend_StateProof_Path_4_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 285,
+      "wire_id": 288,
       "path": "OptionalSpend_StateProof_Path_5_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 286,
+      "wire_id": 289,
       "path": "OptionalSpend_StateProof_Path_5_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 287,
+      "wire_id": 290,
       "path": "OptionalSpend_StateProof_Path_5_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 288,
+      "wire_id": 291,
       "path": "OptionalSpend_StateProof_Path_6_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 289,
+      "wire_id": 292,
       "path": "OptionalSpend_StateProof_Path_6_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 290,
+      "wire_id": 293,
       "path": "OptionalSpend_StateProof_Path_6_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 291,
+      "wire_id": 294,
       "path": "OptionalSpend_StateProof_Path_7_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 292,
+      "wire_id": 295,
       "path": "OptionalSpend_StateProof_Path_7_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 293,
+      "wire_id": 296,
       "path": "OptionalSpend_StateProof_Path_7_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 294,
+      "wire_id": 297,
       "path": "OptionalSpend_StateProof_Path_8_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 295,
+      "wire_id": 298,
       "path": "OptionalSpend_StateProof_Path_8_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 296,
+      "wire_id": 299,
       "path": "OptionalSpend_StateProof_Path_8_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 297,
+      "wire_id": 300,
       "path": "OptionalSpend_StateProof_Path_9_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 298,
+      "wire_id": 301,
       "path": "OptionalSpend_StateProof_Path_9_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 299,
+      "wire_id": 302,
       "path": "OptionalSpend_StateProof_Path_9_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 300,
+      "wire_id": 303,
       "path": "OptionalSpend_StateProof_Path_10_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 301,
+      "wire_id": 304,
       "path": "OptionalSpend_StateProof_Path_10_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 302,
+      "wire_id": 305,
       "path": "OptionalSpend_StateProof_Path_10_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 303,
+      "wire_id": 306,
       "path": "OptionalSpend_StateProof_Path_11_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 304,
+      "wire_id": 307,
       "path": "OptionalSpend_StateProof_Path_11_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 305,
+      "wire_id": 308,
       "path": "OptionalSpend_StateProof_Path_11_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 306,
+      "wire_id": 309,
       "path": "OptionalSpend_StateProof_Path_12_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 307,
+      "wire_id": 310,
       "path": "OptionalSpend_StateProof_Path_12_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 308,
+      "wire_id": 311,
       "path": "OptionalSpend_StateProof_Path_12_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 309,
+      "wire_id": 312,
       "path": "OptionalSpend_StateProof_Path_13_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 310,
+      "wire_id": 313,
       "path": "OptionalSpend_StateProof_Path_13_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 311,
+      "wire_id": 314,
       "path": "OptionalSpend_StateProof_Path_13_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 312,
+      "wire_id": 315,
       "path": "OptionalSpend_StateProof_Path_14_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 313,
+      "wire_id": 316,
       "path": "OptionalSpend_StateProof_Path_14_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 314,
+      "wire_id": 317,
       "path": "OptionalSpend_StateProof_Path_14_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 315,
+      "wire_id": 318,
       "path": "OptionalSpend_StateProof_Path_15_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 316,
+      "wire_id": 319,
       "path": "OptionalSpend_StateProof_Path_15_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 317,
+      "wire_id": 320,
       "path": "OptionalSpend_StateProof_Path_15_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 318,
+      "wire_id": 321,
       "path": "OptionalSpend_StateProof_Path_16_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 319,
+      "wire_id": 322,
       "path": "OptionalSpend_StateProof_Path_16_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 320,
+      "wire_id": 323,
       "path": "OptionalSpend_StateProof_Path_16_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 321,
+      "wire_id": 324,
       "path": "OptionalSpend_StateProof_Path_17_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 322,
+      "wire_id": 325,
       "path": "OptionalSpend_StateProof_Path_17_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 323,
+      "wire_id": 326,
       "path": "OptionalSpend_StateProof_Path_17_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 324,
+      "wire_id": 327,
       "path": "OptionalSpend_StateProof_Path_18_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 325,
+      "wire_id": 328,
       "path": "OptionalSpend_StateProof_Path_18_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 326,
+      "wire_id": 329,
       "path": "OptionalSpend_StateProof_Path_18_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 327,
+      "wire_id": 330,
       "path": "OptionalSpend_StateProof_Path_19_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 328,
+      "wire_id": 331,
       "path": "OptionalSpend_StateProof_Path_19_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 329,
+      "wire_id": 332,
       "path": "OptionalSpend_StateProof_Path_19_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 330,
+      "wire_id": 333,
       "path": "OptionalSpend_StateProof_Path_20_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 331,
+      "wire_id": 334,
       "path": "OptionalSpend_StateProof_Path_20_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 332,
+      "wire_id": 335,
       "path": "OptionalSpend_StateProof_Path_20_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 333,
+      "wire_id": 336,
       "path": "OptionalSpend_StateProof_Path_21_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 334,
+      "wire_id": 337,
       "path": "OptionalSpend_StateProof_Path_21_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 335,
+      "wire_id": 338,
       "path": "OptionalSpend_StateProof_Path_21_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 336,
+      "wire_id": 339,
       "path": "OptionalSpend_StateProof_Path_22_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 337,
+      "wire_id": 340,
       "path": "OptionalSpend_StateProof_Path_22_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 338,
+      "wire_id": 341,
       "path": "OptionalSpend_StateProof_Path_22_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 339,
+      "wire_id": 342,
       "path": "OptionalSpend_StateProof_Path_23_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 340,
+      "wire_id": 343,
       "path": "OptionalSpend_StateProof_Path_23_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 341,
+      "wire_id": 344,
       "path": "OptionalSpend_StateProof_Path_23_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 342,
+      "wire_id": 345,
       "path": "OptionalSpend_AuthRandomizer",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 343,
+      "wire_id": 346,
       "path": "OptionalSpend_IsDummy",
       "visibility": "secret",
       "constraint_rows": 9
     },
     {
-      "wire_id": 344,
+      "wire_id": 347,
       "path": "OptionalSpend_DummyNullifierSeed",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 345,
+      "wire_id": 348,
       "path": "OptionalSpend_HistoryRequired",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 346,
+      "wire_id": 349,
       "path": "ReceiverOutput_NoteCommitment",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 347,
+      "wire_id": 350,
       "path": "ReceiverOutput_Note_Blinding",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 348,
+      "wire_id": 351,
       "path": "ReceiverOutput_Note_Amount",
       "visibility": "secret",
       "constraint_rows": 12
     },
     {
-      "wire_id": 349,
+      "wire_id": 352,
       "path": "ReceiverOutput_Note_RecoveryCommitment",
       "visibility": "secret",
       "constraint_rows": 5
     },
     {
-      "wire_id": 350,
+      "wire_id": 353,
       "path": "ReceiverOutput_Recipient_DivGen_X",
       "visibility": "secret",
       "constraint_rows": 6
     },
     {
-      "wire_id": 351,
+      "wire_id": 354,
       "path": "ReceiverOutput_Recipient_DivGen_Y",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 352,
+      "wire_id": 355,
       "path": "ReceiverOutput_Recipient_Transmission_X",
       "visibility": "secret",
       "constraint_rows": 6
     },
     {
-      "wire_id": 353,
+      "wire_id": 356,
       "path": "ReceiverOutput_Recipient_Transmission_Y",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 354,
+      "wire_id": 357,
       "path": "ReceiverOutput_Recipient_Capk_X",
       "visibility": "secret",
       "constraint_rows": 775
     },
     {
-      "wire_id": 355,
+      "wire_id": 358,
       "path": "ReceiverOutput_Recipient_Capk_Y",
       "visibility": "secret",
       "constraint_rows": 771
     },
     {
-      "wire_id": 356,
+      "wire_id": 359,
       "path": "ReceiverOutput_Recipient_RnkDhPk_X",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 357,
+      "wire_id": 360,
       "path": "ReceiverOutput_Recipient_RnkDhPk_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 358,
+      "wire_id": 361,
       "path": "ReceiverOutput_Recipient_RnkCommitment",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 359,
+      "wire_id": 362,
       "path": "ReceiverOutput_Recipient_Status",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 360,
+      "wire_id": 363,
       "path": "ReceiverOutput_Recipient_Path_0_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 361,
+      "wire_id": 364,
       "path": "ReceiverOutput_Recipient_Path_0_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 362,
+      "wire_id": 365,
       "path": "ReceiverOutput_Recipient_Path_0_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 363,
+      "wire_id": 366,
       "path": "ReceiverOutput_Recipient_Path_1_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 364,
+      "wire_id": 367,
       "path": "ReceiverOutput_Recipient_Path_1_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 365,
+      "wire_id": 368,
       "path": "ReceiverOutput_Recipient_Path_1_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 366,
+      "wire_id": 369,
       "path": "ReceiverOutput_Recipient_Path_2_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 367,
+      "wire_id": 370,
       "path": "ReceiverOutput_Recipient_Path_2_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 368,
+      "wire_id": 371,
       "path": "ReceiverOutput_Recipient_Path_2_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 369,
+      "wire_id": 372,
       "path": "ReceiverOutput_Recipient_Path_3_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 370,
+      "wire_id": 373,
       "path": "ReceiverOutput_Recipient_Path_3_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 371,
+      "wire_id": 374,
       "path": "ReceiverOutput_Recipient_Path_3_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 372,
+      "wire_id": 375,
       "path": "ReceiverOutput_Recipient_Path_4_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 373,
+      "wire_id": 376,
       "path": "ReceiverOutput_Recipient_Path_4_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 374,
+      "wire_id": 377,
       "path": "ReceiverOutput_Recipient_Path_4_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 375,
+      "wire_id": 378,
       "path": "ReceiverOutput_Recipient_Path_5_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 376,
+      "wire_id": 379,
       "path": "ReceiverOutput_Recipient_Path_5_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 377,
+      "wire_id": 380,
       "path": "ReceiverOutput_Recipient_Path_5_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 378,
+      "wire_id": 381,
       "path": "ReceiverOutput_Recipient_Path_6_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 379,
+      "wire_id": 382,
       "path": "ReceiverOutput_Recipient_Path_6_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 380,
+      "wire_id": 383,
       "path": "ReceiverOutput_Recipient_Path_6_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 381,
+      "wire_id": 384,
       "path": "ReceiverOutput_Recipient_Path_7_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 382,
+      "wire_id": 385,
       "path": "ReceiverOutput_Recipient_Path_7_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 383,
+      "wire_id": 386,
       "path": "ReceiverOutput_Recipient_Path_7_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 384,
+      "wire_id": 387,
       "path": "ReceiverOutput_Recipient_Path_8_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 385,
+      "wire_id": 388,
       "path": "ReceiverOutput_Recipient_Path_8_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 386,
+      "wire_id": 389,
       "path": "ReceiverOutput_Recipient_Path_8_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 387,
+      "wire_id": 390,
       "path": "ReceiverOutput_Recipient_Path_9_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 388,
+      "wire_id": 391,
       "path": "ReceiverOutput_Recipient_Path_9_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 389,
+      "wire_id": 392,
       "path": "ReceiverOutput_Recipient_Path_9_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 390,
+      "wire_id": 393,
       "path": "ReceiverOutput_Recipient_Path_10_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 391,
+      "wire_id": 394,
       "path": "ReceiverOutput_Recipient_Path_10_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 392,
+      "wire_id": 395,
       "path": "ReceiverOutput_Recipient_Path_10_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 393,
+      "wire_id": 396,
       "path": "ReceiverOutput_Recipient_Path_11_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 394,
+      "wire_id": 397,
       "path": "ReceiverOutput_Recipient_Path_11_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 395,
+      "wire_id": 398,
       "path": "ReceiverOutput_Recipient_Path_11_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 396,
+      "wire_id": 399,
       "path": "ReceiverOutput_Recipient_Path_12_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 397,
+      "wire_id": 400,
       "path": "ReceiverOutput_Recipient_Path_12_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 398,
+      "wire_id": 401,
       "path": "ReceiverOutput_Recipient_Path_12_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 399,
+      "wire_id": 402,
       "path": "ReceiverOutput_Recipient_Path_13_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 400,
+      "wire_id": 403,
       "path": "ReceiverOutput_Recipient_Path_13_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 401,
+      "wire_id": 404,
       "path": "ReceiverOutput_Recipient_Path_13_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 402,
+      "wire_id": 405,
       "path": "ReceiverOutput_Recipient_Path_14_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 403,
+      "wire_id": 406,
       "path": "ReceiverOutput_Recipient_Path_14_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 404,
+      "wire_id": 407,
       "path": "ReceiverOutput_Recipient_Path_14_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 405,
+      "wire_id": 408,
       "path": "ReceiverOutput_Recipient_Path_15_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 406,
+      "wire_id": 409,
       "path": "ReceiverOutput_Recipient_Path_15_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 407,
+      "wire_id": 410,
       "path": "ReceiverOutput_Recipient_Path_15_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 408,
+      "wire_id": 411,
       "path": "ReceiverOutput_Recipient_Position",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 409,
+      "wire_id": 412,
       "path": "ReceiverOutput_Recovery_Commitment",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 410,
+      "wire_id": 413,
       "path": "ReceiverOutput_Recovery_EPK_X",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 411,
+      "wire_id": 414,
       "path": "ReceiverOutput_Recovery_EPK_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 412,
+      "wire_id": 415,
       "path": "ReceiverOutput_Recovery_C2",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 413,
+      "wire_id": 416,
       "path": "ReceiverOutput_Recovery_Salt",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 414,
+      "wire_id": 417,
       "path": "ReceiverOutput_Recovery_KeyConfirmation",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 415,
+      "wire_id": 418,
       "path": "ReceiverOutput_Recovery_EncryptedAmount",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 416,
+      "wire_id": 419,
       "path": "ReceiverOutput_Recovery_EncryptedNoteBlinding",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 417,
+      "wire_id": 420,
       "path": "ReceiverOutput_Recovery_Seed",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 418,
+      "wire_id": 421,
       "path": "ReceiverOutput_Recovery_Randomizer",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 419,
+      "wire_id": 422,
       "path": "ChangeOutput_NoteCommitment",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 420,
+      "wire_id": 423,
       "path": "ChangeOutput_Note_Blinding",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 421,
+      "wire_id": 424,
       "path": "ChangeOutput_Note_Amount",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 422,
+      "wire_id": 425,
       "path": "ChangeOutput_Note_RecoveryCommitment",
       "visibility": "secret",
       "constraint_rows": 5
     },
     {
-      "wire_id": 423,
+      "wire_id": 426,
       "path": "ChangeOutput_Recovery_Commitment",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 424,
+      "wire_id": 427,
       "path": "ChangeOutput_Recovery_EPK_X",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 425,
+      "wire_id": 428,
       "path": "ChangeOutput_Recovery_EPK_Y",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 426,
+      "wire_id": 429,
       "path": "ChangeOutput_Recovery_C2",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 427,
+      "wire_id": 430,
       "path": "ChangeOutput_Recovery_Salt",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 428,
+      "wire_id": 431,
       "path": "ChangeOutput_Recovery_KeyConfirmation",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 429,
+      "wire_id": 432,
       "path": "ChangeOutput_Recovery_EncryptedAmount",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 430,
+      "wire_id": 433,
       "path": "ChangeOutput_Recovery_EncryptedNoteBlinding",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 431,
+      "wire_id": 434,
       "path": "ChangeOutput_Recovery_Seed",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 432,
+      "wire_id": 435,
       "path": "ChangeOutput_Recovery_Randomizer",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 433,
+      "wire_id": 436,
       "path": "VolumeAccumulator_Nullifier",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 434,
+      "wire_id": 437,
       "path": "VolumeAccumulator_Commitment",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 435,
+      "wire_id": 438,
       "path": "VolumeAccumulator_DayStart",
       "visibility": "secret",
       "constraint_rows": 13
     },
     {
-      "wire_id": 436,
+      "wire_id": 439,
       "path": "VolumeAccumulator_ProofContext",
       "visibility": "secret",
       "constraint_rows": 10
     },
     {
-      "wire_id": 437,
+      "wire_id": 440,
       "path": "VolumeAccumulator_UseReal",
       "visibility": "secret",
       "constraint_rows": 10
     },
     {
-      "wire_id": 438,
+      "wire_id": 441,
       "path": "VolumeAccumulator_StartsNewDay",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 439,
+      "wire_id": 442,
       "path": "VolumeAccumulator_TimestampDayIndex",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 440,
+      "wire_id": 443,
       "path": "VolumeAccumulator_TimestampSecond",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 441,
+      "wire_id": 444,
       "path": "VolumeAccumulator_Subject",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 442,
+      "wire_id": 445,
       "path": "VolumeAccumulator_PriorVolume",
       "visibility": "secret",
       "constraint_rows": 7
     },
     {
-      "wire_id": 443,
+      "wire_id": 446,
       "path": "VolumeAccumulator_PriorBlinding",
       "visibility": "secret",
       "constraint_rows": 2
     },
     {
-      "wire_id": 444,
+      "wire_id": 447,
       "path": "VolumeAccumulator_PriorCommitment",
       "visibility": "secret",
       "constraint_rows": 1
     },
     {
-      "wire_id": 445,
+      "wire_id": 448,
       "path": "VolumeAccumulator_PriorStateProof_Position",
       "visibility": "secret",
       "constraint_rows": 3
     },
     {
-      "wire_id": 446,
+      "wire_id": 449,
       "path": "VolumeAccumulator_PriorStateProof_Path_0_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 447,
+      "wire_id": 450,
       "path": "VolumeAccumulator_PriorStateProof_Path_0_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 448,
+      "wire_id": 451,
       "path": "VolumeAccumulator_PriorStateProof_Path_0_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 449,
+      "wire_id": 452,
       "path": "VolumeAccumulator_PriorStateProof_Path_1_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 450,
+      "wire_id": 453,
       "path": "VolumeAccumulator_PriorStateProof_Path_1_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 451,
+      "wire_id": 454,
       "path": "VolumeAccumulator_PriorStateProof_Path_1_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 452,
+      "wire_id": 455,
       "path": "VolumeAccumulator_PriorStateProof_Path_2_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 453,
+      "wire_id": 456,
       "path": "VolumeAccumulator_PriorStateProof_Path_2_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 454,
+      "wire_id": 457,
       "path": "VolumeAccumulator_PriorStateProof_Path_2_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 455,
+      "wire_id": 458,
       "path": "VolumeAccumulator_PriorStateProof_Path_3_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 456,
+      "wire_id": 459,
       "path": "VolumeAccumulator_PriorStateProof_Path_3_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 457,
+      "wire_id": 460,
       "path": "VolumeAccumulator_PriorStateProof_Path_3_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 458,
+      "wire_id": 461,
       "path": "VolumeAccumulator_PriorStateProof_Path_4_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 459,
+      "wire_id": 462,
       "path": "VolumeAccumulator_PriorStateProof_Path_4_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 460,
+      "wire_id": 463,
       "path": "VolumeAccumulator_PriorStateProof_Path_4_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 461,
+      "wire_id": 464,
       "path": "VolumeAccumulator_PriorStateProof_Path_5_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 462,
+      "wire_id": 465,
       "path": "VolumeAccumulator_PriorStateProof_Path_5_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 463,
+      "wire_id": 466,
       "path": "VolumeAccumulator_PriorStateProof_Path_5_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 464,
+      "wire_id": 467,
       "path": "VolumeAccumulator_PriorStateProof_Path_6_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 465,
+      "wire_id": 468,
       "path": "VolumeAccumulator_PriorStateProof_Path_6_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 466,
+      "wire_id": 469,
       "path": "VolumeAccumulator_PriorStateProof_Path_6_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 467,
+      "wire_id": 470,
       "path": "VolumeAccumulator_PriorStateProof_Path_7_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 468,
+      "wire_id": 471,
       "path": "VolumeAccumulator_PriorStateProof_Path_7_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 469,
+      "wire_id": 472,
       "path": "VolumeAccumulator_PriorStateProof_Path_7_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 470,
+      "wire_id": 473,
       "path": "VolumeAccumulator_PriorStateProof_Path_8_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 471,
+      "wire_id": 474,
       "path": "VolumeAccumulator_PriorStateProof_Path_8_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 472,
+      "wire_id": 475,
       "path": "VolumeAccumulator_PriorStateProof_Path_8_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 473,
+      "wire_id": 476,
       "path": "VolumeAccumulator_PriorStateProof_Path_9_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 474,
+      "wire_id": 477,
       "path": "VolumeAccumulator_PriorStateProof_Path_9_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 475,
+      "wire_id": 478,
       "path": "VolumeAccumulator_PriorStateProof_Path_9_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 476,
+      "wire_id": 479,
       "path": "VolumeAccumulator_PriorStateProof_Path_10_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 477,
+      "wire_id": 480,
       "path": "VolumeAccumulator_PriorStateProof_Path_10_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 478,
+      "wire_id": 481,
       "path": "VolumeAccumulator_PriorStateProof_Path_10_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 479,
+      "wire_id": 482,
       "path": "VolumeAccumulator_PriorStateProof_Path_11_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 480,
+      "wire_id": 483,
       "path": "VolumeAccumulator_PriorStateProof_Path_11_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 481,
+      "wire_id": 484,
       "path": "VolumeAccumulator_PriorStateProof_Path_11_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 482,
+      "wire_id": 485,
       "path": "VolumeAccumulator_PriorStateProof_Path_12_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 483,
+      "wire_id": 486,
       "path": "VolumeAccumulator_PriorStateProof_Path_12_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 484,
+      "wire_id": 487,
       "path": "VolumeAccumulator_PriorStateProof_Path_12_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 485,
+      "wire_id": 488,
       "path": "VolumeAccumulator_PriorStateProof_Path_13_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 486,
+      "wire_id": 489,
       "path": "VolumeAccumulator_PriorStateProof_Path_13_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 487,
+      "wire_id": 490,
       "path": "VolumeAccumulator_PriorStateProof_Path_13_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 488,
+      "wire_id": 491,
       "path": "VolumeAccumulator_PriorStateProof_Path_14_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 489,
+      "wire_id": 492,
       "path": "VolumeAccumulator_PriorStateProof_Path_14_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 490,
+      "wire_id": 493,
       "path": "VolumeAccumulator_PriorStateProof_Path_14_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 491,
+      "wire_id": 494,
       "path": "VolumeAccumulator_PriorStateProof_Path_15_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 492,
+      "wire_id": 495,
       "path": "VolumeAccumulator_PriorStateProof_Path_15_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 493,
+      "wire_id": 496,
       "path": "VolumeAccumulator_PriorStateProof_Path_15_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 494,
+      "wire_id": 497,
       "path": "VolumeAccumulator_PriorStateProof_Path_16_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 495,
+      "wire_id": 498,
       "path": "VolumeAccumulator_PriorStateProof_Path_16_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 496,
+      "wire_id": 499,
       "path": "VolumeAccumulator_PriorStateProof_Path_16_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 497,
+      "wire_id": 500,
       "path": "VolumeAccumulator_PriorStateProof_Path_17_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 498,
+      "wire_id": 501,
       "path": "VolumeAccumulator_PriorStateProof_Path_17_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 499,
+      "wire_id": 502,
       "path": "VolumeAccumulator_PriorStateProof_Path_17_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 500,
+      "wire_id": 503,
       "path": "VolumeAccumulator_PriorStateProof_Path_18_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 501,
+      "wire_id": 504,
       "path": "VolumeAccumulator_PriorStateProof_Path_18_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 502,
+      "wire_id": 505,
       "path": "VolumeAccumulator_PriorStateProof_Path_18_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 503,
+      "wire_id": 506,
       "path": "VolumeAccumulator_PriorStateProof_Path_19_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 504,
+      "wire_id": 507,
       "path": "VolumeAccumulator_PriorStateProof_Path_19_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 505,
+      "wire_id": 508,
       "path": "VolumeAccumulator_PriorStateProof_Path_19_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 506,
+      "wire_id": 509,
       "path": "VolumeAccumulator_PriorStateProof_Path_20_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 507,
+      "wire_id": 510,
       "path": "VolumeAccumulator_PriorStateProof_Path_20_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 508,
+      "wire_id": 511,
       "path": "VolumeAccumulator_PriorStateProof_Path_20_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 509,
+      "wire_id": 512,
       "path": "VolumeAccumulator_PriorStateProof_Path_21_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 510,
+      "wire_id": 513,
       "path": "VolumeAccumulator_PriorStateProof_Path_21_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 511,
+      "wire_id": 514,
       "path": "VolumeAccumulator_PriorStateProof_Path_21_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 512,
+      "wire_id": 515,
       "path": "VolumeAccumulator_PriorStateProof_Path_22_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 513,
+      "wire_id": 516,
       "path": "VolumeAccumulator_PriorStateProof_Path_22_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 514,
+      "wire_id": 517,
       "path": "VolumeAccumulator_PriorStateProof_Path_22_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 515,
+      "wire_id": 518,
       "path": "VolumeAccumulator_PriorStateProof_Path_23_0",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 516,
+      "wire_id": 519,
       "path": "VolumeAccumulator_PriorStateProof_Path_23_1",
       "visibility": "secret",
       "constraint_rows": 8
     },
     {
-      "wire_id": 517,
+      "wire_id": 520,
       "path": "VolumeAccumulator_PriorStateProof_Path_23_2",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 518,
+      "wire_id": 521,
       "path": "VolumeAccumulator_SuccessorVolume",
       "visibility": "secret",
       "constraint_rows": 4
     },
     {
-      "wire_id": 519,
+      "wire_id": 522,
       "path": "VolumeAccumulator_SuccessorBlinding",
       "visibility": "secret",
       "constraint_rows": 2
@@ -4561,7 +4579,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 181,
+              "wire_id": 184,
               "coefficient": "1"
             }
           ]
@@ -4575,7 +4593,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 182,
+              "wire_id": 185,
               "coefficient": "1"
             }
           ]
@@ -4584,7 +4602,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 183,
+              "wire_id": 186,
               "coefficient": "1"
             }
           ]
@@ -4598,7 +4616,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 184,
+              "wire_id": 187,
               "coefficient": "1"
             }
           ]
@@ -4612,7 +4630,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 185,
+              "wire_id": 188,
               "coefficient": "1"
             }
           ]
@@ -4626,7 +4644,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 187,
+              "wire_id": 190,
               "coefficient": "1"
             }
           ]
@@ -4640,7 +4658,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 188,
+              "wire_id": 191,
               "coefficient": "1"
             }
           ]
@@ -4650,33 +4668,6 @@
     {
       "name": "spend0.state_proof.path",
       "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 189,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 190,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 191,
-              "coefficient": "1"
-            }
-          ]
-        },
         {
           "constant": "0",
           "terms": [
@@ -5297,6 +5288,33 @@
               "coefficient": "1"
             }
           ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 261,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 262,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 263,
+              "coefficient": "1"
+            }
+          ]
         }
       ]
     },
@@ -5307,7 +5325,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 261,
+              "wire_id": 264,
               "coefficient": "1"
             }
           ]
@@ -5321,7 +5339,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 262,
+              "wire_id": 265,
               "coefficient": "1"
             }
           ]
@@ -5335,7 +5353,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 263,
+              "wire_id": 266,
               "coefficient": "1"
             }
           ]
@@ -5349,7 +5367,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 264,
+              "wire_id": 267,
               "coefficient": "1"
             }
           ]
@@ -5358,7 +5376,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 265,
+              "wire_id": 268,
               "coefficient": "1"
             }
           ]
@@ -5372,7 +5390,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 266,
+              "wire_id": 269,
               "coefficient": "1"
             }
           ]
@@ -5386,7 +5404,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 267,
+              "wire_id": 270,
               "coefficient": "1"
             }
           ]
@@ -5400,7 +5418,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 269,
+              "wire_id": 272,
               "coefficient": "1"
             }
           ]
@@ -5410,33 +5428,6 @@
     {
       "name": "spend1.state_proof.path",
       "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 270,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 271,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 272,
-              "coefficient": "1"
-            }
-          ]
-        },
         {
           "constant": "0",
           "terms": [
@@ -6057,12 +6048,7 @@
               "coefficient": "1"
             }
           ]
-        }
-      ]
-    },
-    {
-      "name": "spend1.auth_randomizer",
-      "expressions": [
+        },
         {
           "constant": "0",
           "terms": [
@@ -6071,11 +6057,29 @@
               "coefficient": "1"
             }
           ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 343,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 344,
+              "coefficient": "1"
+            }
+          ]
         }
       ]
     },
     {
-      "name": "spend1.history_required",
+      "name": "spend1.auth_randomizer",
       "expressions": [
         {
           "constant": "0",
@@ -6089,63 +6093,7 @@
       ]
     },
     {
-      "name": "spend1.is_dummy",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 343,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "spend1.dummy_nullifier_seed",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 344,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "output0.note_commitment.claimed",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 346,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "output0.note.blinding",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 347,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "output0.note.amount",
+      "name": "spend1.history_required",
       "expressions": [
         {
           "constant": "0",
@@ -6159,7 +6107,49 @@
       ]
     },
     {
-      "name": "output0.recipient.div_gen",
+      "name": "spend1.is_dummy",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 346,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "spend1.dummy_nullifier_seed",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 347,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output0.note_commitment.claimed",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 349,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output0.note.blinding",
       "expressions": [
         {
           "constant": "0",
@@ -6169,12 +6159,40 @@
               "coefficient": "1"
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "name": "output0.note.amount",
+      "expressions": [
         {
           "constant": "0",
           "terms": [
             {
               "wire_id": 351,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output0.recipient.div_gen",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 353,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 354,
               "coefficient": "1"
             }
           ]
@@ -6188,7 +6206,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 352,
+              "wire_id": 355,
               "coefficient": "1"
             }
           ]
@@ -6197,7 +6215,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 353,
+              "wire_id": 356,
               "coefficient": "1"
             }
           ]
@@ -6211,7 +6229,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 354,
+              "wire_id": 357,
               "coefficient": "1"
             }
           ]
@@ -6220,7 +6238,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 355,
+              "wire_id": 358,
               "coefficient": "1"
             }
           ]
@@ -6234,7 +6252,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 358,
+              "wire_id": 361,
               "coefficient": "1"
             }
           ]
@@ -6248,7 +6266,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 359,
+              "wire_id": 362,
               "coefficient": "1"
             }
           ]
@@ -6258,33 +6276,6 @@
     {
       "name": "output0.recipient.path",
       "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 360,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 361,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 362,
-              "coefficient": "1"
-            }
-          ]
-        },
         {
           "constant": "0",
           "terms": [
@@ -6689,6 +6680,33 @@
               "coefficient": "1"
             }
           ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 408,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 409,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 410,
+              "coefficient": "1"
+            }
+          ]
         }
       ]
     },
@@ -6699,7 +6717,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 408,
+              "wire_id": 411,
               "coefficient": "1"
             }
           ]
@@ -6713,7 +6731,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 419,
+              "wire_id": 422,
               "coefficient": "1"
             }
           ]
@@ -6727,7 +6745,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 420,
+              "wire_id": 423,
               "coefficient": "1"
             }
           ]
@@ -6741,7 +6759,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 421,
+              "wire_id": 424,
               "coefficient": "1"
             }
           ]
@@ -6755,7 +6773,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 141,
+              "wire_id": 144,
               "coefficient": "1"
             }
           ]
@@ -6769,43 +6787,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 142,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 143,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 144,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
               "wire_id": 145,
               "coefficient": "1"
             }
           ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.metadata",
-      "expressions": [
+        },
         {
           "constant": "0",
           "terms": [
@@ -6832,7 +6818,12 @@
               "coefficient": "1"
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "name": "compliance.metadata",
+      "expressions": [
         {
           "constant": "0",
           "terms": [
@@ -6886,12 +6877,7 @@
               "coefficient": "1"
             }
           ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.sender_r_core",
-      "expressions": [
+        },
         {
           "constant": "0",
           "terms": [
@@ -6900,12 +6886,7 @@
               "coefficient": "1"
             }
           ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.sender_r_ext",
-      "expressions": [
+        },
         {
           "constant": "0",
           "terms": [
@@ -6914,12 +6895,7 @@
               "coefficient": "1"
             }
           ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.output_r_core",
-      "expressions": [
+        },
         {
           "constant": "0",
           "terms": [
@@ -6932,7 +6908,7 @@
       ]
     },
     {
-      "name": "compliance.output_r_ext",
+      "name": "compliance.sender_r_core",
       "expressions": [
         {
           "constant": "0",
@@ -6946,7 +6922,7 @@
       ]
     },
     {
-      "name": "compliance.sender_core.epk",
+      "name": "compliance.sender_r_ext",
       "expressions": [
         {
           "constant": "0",
@@ -6956,7 +6932,12 @@
               "coefficient": "1"
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "name": "compliance.output_r_core",
+      "expressions": [
         {
           "constant": "0",
           "terms": [
@@ -6969,7 +6950,7 @@
       ]
     },
     {
-      "name": "compliance.sender_core.c2",
+      "name": "compliance.output_r_ext",
       "expressions": [
         {
           "constant": "0",
@@ -6983,13 +6964,50 @@
       ]
     },
     {
-      "name": "compliance.sender_core.key_confirmation",
+      "name": "compliance.sender_core.epk",
       "expressions": [
         {
           "constant": "0",
           "terms": [
             {
               "wire_id": 162,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 163,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "compliance.sender_core.c2",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 164,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "compliance.sender_core.key_confirmation",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 165,
               "coefficient": "1"
             }
           ]
@@ -7003,43 +7021,6 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 163,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.sender_ext.epk",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 164,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 165,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.sender_ext.c2",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
               "wire_id": 166,
               "coefficient": "1"
             }
@@ -7048,7 +7029,7 @@
       ]
     },
     {
-      "name": "compliance.sender_ext.ciphertext",
+      "name": "compliance.sender_ext.epk",
       "expressions": [
         {
           "constant": "0",
@@ -7067,7 +7048,12 @@
               "coefficient": "1"
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "name": "compliance.sender_ext.c2",
+      "expressions": [
         {
           "constant": "0",
           "terms": [
@@ -7080,7 +7066,7 @@
       ]
     },
     {
-      "name": "compliance.output_core.epk",
+      "name": "compliance.sender_ext.ciphertext",
       "expressions": [
         {
           "constant": "0",
@@ -7099,6 +7085,38 @@
               "coefficient": "1"
             }
           ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 172,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "compliance.output_core.epk",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 173,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 174,
+              "coefficient": "1"
+            }
+          ]
         }
       ]
     },
@@ -7109,7 +7127,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 172,
+              "wire_id": 175,
               "coefficient": "1"
             }
           ]
@@ -7123,7 +7141,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 173,
+              "wire_id": 176,
               "coefficient": "1"
             }
           ]
@@ -7137,43 +7155,6 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 174,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.output_ext.epk",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 175,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 176,
-              "coefficient": "1"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "compliance.output_ext.c2",
-      "expressions": [
-        {
-          "constant": "0",
-          "terms": [
-            {
               "wire_id": 177,
               "coefficient": "1"
             }
@@ -7182,7 +7163,7 @@
       ]
     },
     {
-      "name": "compliance.output_ext.ciphertext",
+      "name": "compliance.output_ext.epk",
       "expressions": [
         {
           "constant": "0",
@@ -7201,12 +7182,49 @@
               "coefficient": "1"
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "name": "compliance.output_ext.c2",
+      "expressions": [
         {
           "constant": "0",
           "terms": [
             {
               "wire_id": 180,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "compliance.output_ext.ciphertext",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 181,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 182,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 183,
               "coefficient": "1"
             }
           ]
@@ -7220,7 +7238,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 187,
+              "wire_id": 190,
               "coefficient": "1"
             }
           ]
@@ -7234,7 +7252,7 @@
           "constant": "5137130679536289319172086801019188818661635996481423938281993071105025414769",
           "terms": [
             {
-              "wire_id": 523,
+              "wire_id": 526,
               "coefficient": "1"
             }
           ]
@@ -7243,7 +7261,7 @@
           "constant": "7448520079642471549799603907607143574677374037424044774902333762019934162060",
           "terms": [
             {
-              "wire_id": 524,
+              "wire_id": 527,
               "coefficient": "1"
             }
           ]
@@ -7257,7 +7275,7 @@
           "constant": "6943091991010186327908355613514593954864553243174057452223508858492141588797",
           "terms": [
             {
-              "wire_id": 525,
+              "wire_id": 528,
               "coefficient": "1"
             }
           ]
@@ -7266,7 +7284,7 @@
           "constant": "7577699061414190638158415127190667490634931787932918416594213747467015593932",
           "terms": [
             {
-              "wire_id": 526,
+              "wire_id": 529,
               "coefficient": "1"
             }
           ]
@@ -7280,7 +7298,7 @@
           "constant": "146917404083759493085774782844141783124558702674359650395366636584294839859",
           "terms": [
             {
-              "wire_id": 527,
+              "wire_id": 530,
               "coefficient": "1"
             }
           ]
@@ -7294,7 +7312,7 @@
           "constant": "146917404083759493085774782844141783124558702674359650395366636584294839859",
           "terms": [
             {
-              "wire_id": 528,
+              "wire_id": 531,
               "coefficient": "1"
             }
           ]
@@ -7308,7 +7326,7 @@
           "constant": "146917404083759493085774782844141783124558702674359650395366636584294839859",
           "terms": [
             {
-              "wire_id": 529,
+              "wire_id": 532,
               "coefficient": "1"
             }
           ]
@@ -7322,7 +7340,7 @@
           "constant": "146917404083759493085774782844141783124558702674359650395366636584294839859",
           "terms": [
             {
-              "wire_id": 530,
+              "wire_id": 533,
               "coefficient": "1"
             }
           ]
@@ -7336,11 +7354,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 893,
+              "wire_id": 896,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 1233,
+              "wire_id": 1236,
               "coefficient": "1"
             }
           ]
@@ -7354,11 +7372,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 1596,
+              "wire_id": 1599,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 1936,
+              "wire_id": 1939,
               "coefficient": "1"
             }
           ]
@@ -7372,11 +7390,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 6891,
+              "wire_id": 6894,
               "coefficient": "1"
             },
             {
-              "wire_id": 6899,
+              "wire_id": 6902,
               "coefficient": "1"
             }
           ]
@@ -7385,11 +7403,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 6892,
+              "wire_id": 6895,
               "coefficient": "1"
             },
             {
-              "wire_id": 6900,
+              "wire_id": 6903,
               "coefficient": "1"
             }
           ]
@@ -7403,11 +7421,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 7266,
+              "wire_id": 7269,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 7606,
+              "wire_id": 7609,
               "coefficient": "1"
             }
           ]
@@ -7421,19 +7439,19 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 7901,
+              "wire_id": 7904,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 7906,
+              "wire_id": 7909,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 7911,
+              "wire_id": 7914,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 7916,
+              "wire_id": 7919,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             }
           ]
@@ -7447,11 +7465,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 8279,
+              "wire_id": 8282,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 8619,
+              "wire_id": 8622,
               "coefficient": "1"
             }
           ]
@@ -7465,27 +7483,27 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 8984,
+              "wire_id": 8987,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 8989,
+              "wire_id": 8992,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 8994,
+              "wire_id": 8997,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 8999,
+              "wire_id": 9002,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 9004,
+              "wire_id": 9007,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 9009,
+              "wire_id": 9012,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             }
           ]
@@ -7499,27 +7517,27 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 9374,
+              "wire_id": 9377,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 9379,
+              "wire_id": 9382,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 9384,
+              "wire_id": 9387,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 9389,
+              "wire_id": 9392,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 9394,
+              "wire_id": 9397,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 9399,
+              "wire_id": 9402,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             }
           ]
@@ -7533,23 +7551,23 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 15171,
+              "wire_id": 15174,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 15176,
+              "wire_id": 15179,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 15181,
+              "wire_id": 15184,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 15186,
+              "wire_id": 15189,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 15191,
+              "wire_id": 15194,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             }
           ]
@@ -7563,11 +7581,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 18231,
+              "wire_id": 18234,
               "coefficient": "1"
             },
             {
-              "wire_id": 18232,
+              "wire_id": 18235,
               "coefficient": "1"
             }
           ]
@@ -7581,35 +7599,35 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 20081,
+              "wire_id": 20084,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 20086,
+              "wire_id": 20089,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 20091,
+              "wire_id": 20094,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 20096,
+              "wire_id": 20099,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             },
             {
-              "wire_id": 20101,
+              "wire_id": 20104,
               "coefficient": "7794887768703111160845069174259889105885445540142212764247907805462223912961"
             },
             {
-              "wire_id": 20106,
+              "wire_id": 20109,
               "coefficient": "7841285910183486822516766014582864636277620811214487840225573923351880007681"
             },
             {
-              "wire_id": 20111,
+              "wire_id": 20114,
               "coefficient": "7881497632799812395965569942862776762617506046143792906072884558856248623105"
             },
             {
-              "wire_id": 20116,
+              "wire_id": 20119,
               "coefficient": "7916682890089097272733273380107699873164905626706934838689281364922571161601"
             }
           ]
@@ -7623,23 +7641,23 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 30683,
+              "wire_id": 30686,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 30688,
+              "wire_id": 30691,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 30693,
+              "wire_id": 30696,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 30698,
+              "wire_id": 30701,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 30703,
+              "wire_id": 30706,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             }
           ]
@@ -7676,24 +7694,6 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 184,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 185,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
               "wire_id": 187,
               "coefficient": "1"
             }
@@ -7703,11 +7703,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 893,
-              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
-            },
-            {
-              "wire_id": 1233,
+              "wire_id": 188,
               "coefficient": "1"
             }
           ]
@@ -7716,11 +7712,33 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 1596,
+              "wire_id": 190,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 896,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 1936,
+              "wire_id": 1236,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 1599,
+              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
+            },
+            {
+              "wire_id": 1939,
               "coefficient": "1"
             }
           ]
@@ -7734,31 +7752,31 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 31237,
+              "wire_id": 31240,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 31242,
+              "wire_id": 31245,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 31247,
+              "wire_id": 31250,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 31252,
+              "wire_id": 31255,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 31257,
+              "wire_id": 31260,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             },
             {
-              "wire_id": 31262,
+              "wire_id": 31265,
               "coefficient": "7794887768703111160845069174259889105885445540142212764247907805462223912961"
             },
             {
-              "wire_id": 31267,
+              "wire_id": 31270,
               "coefficient": "7841285910183486822516766014582864636277620811214487840225573923351880007681"
             }
           ]
@@ -7772,19 +7790,19 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 31562,
+              "wire_id": 31565,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 31567,
+              "wire_id": 31570,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 31572,
+              "wire_id": 31575,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 31577,
+              "wire_id": 31580,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             }
           ]
@@ -7798,23 +7816,23 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 40475,
+              "wire_id": 40478,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 40480,
+              "wire_id": 40483,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 40485,
+              "wire_id": 40488,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 40490,
+              "wire_id": 40493,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 40495,
+              "wire_id": 40498,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             }
           ]
@@ -7828,19 +7846,19 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 31562,
+              "wire_id": 31565,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 31567,
+              "wire_id": 31570,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 31572,
+              "wire_id": 31575,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 31577,
+              "wire_id": 31580,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             }
           ]
@@ -7854,7 +7872,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 42305,
+              "wire_id": 42308,
               "coefficient": "1"
             }
           ]
@@ -7863,7 +7881,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 42306,
+              "wire_id": 42309,
               "coefficient": "1"
             }
           ]
@@ -7877,11 +7895,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 42817,
+              "wire_id": 42820,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 43157,
+              "wire_id": 43160,
               "coefficient": "1"
             }
           ]
@@ -7895,7 +7913,7 @@
           "constant": "1",
           "terms": [
             {
-              "wire_id": 343,
+              "wire_id": 346,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             }
           ]
@@ -7909,7 +7927,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 266,
+              "wire_id": 269,
               "coefficient": "1"
             }
           ]
@@ -7918,7 +7936,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 267,
+              "wire_id": 270,
               "coefficient": "1"
             }
           ]
@@ -7927,7 +7945,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 187,
+              "wire_id": 190,
               "coefficient": "1"
             }
           ]
@@ -7936,11 +7954,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 893,
+              "wire_id": 896,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 1233,
+              "wire_id": 1236,
               "coefficient": "1"
             }
           ]
@@ -7949,11 +7967,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 1596,
+              "wire_id": 1599,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 1936,
+              "wire_id": 1939,
               "coefficient": "1"
             }
           ]
@@ -7967,31 +7985,31 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 43557,
+              "wire_id": 43560,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 43562,
+              "wire_id": 43565,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 43567,
+              "wire_id": 43570,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 43572,
+              "wire_id": 43575,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 43577,
+              "wire_id": 43580,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             },
             {
-              "wire_id": 43582,
+              "wire_id": 43585,
               "coefficient": "7794887768703111160845069174259889105885445540142212764247907805462223912961"
             },
             {
-              "wire_id": 43587,
+              "wire_id": 43590,
               "coefficient": "7841285910183486822516766014582864636277620811214487840225573923351880007681"
             }
           ]
@@ -8005,19 +8023,19 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 43882,
+              "wire_id": 43885,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 43887,
+              "wire_id": 43890,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 43892,
+              "wire_id": 43895,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 43897,
+              "wire_id": 43900,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             }
           ]
@@ -8031,23 +8049,23 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 52795,
+              "wire_id": 52798,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 52800,
+              "wire_id": 52803,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 52805,
+              "wire_id": 52808,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 52810,
+              "wire_id": 52813,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 52815,
+              "wire_id": 52818,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             }
           ]
@@ -8061,19 +8079,19 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 53105,
+              "wire_id": 53108,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 53110,
+              "wire_id": 53113,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 53115,
+              "wire_id": 53118,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 53120,
+              "wire_id": 53123,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             }
           ]
@@ -8087,11 +8105,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 53121,
+              "wire_id": 53124,
               "coefficient": "1"
             },
             {
-              "wire_id": 53122,
+              "wire_id": 53125,
               "coefficient": "1"
             }
           ]
@@ -8105,7 +8123,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 54933,
+              "wire_id": 54936,
               "coefficient": "1"
             }
           ]
@@ -8114,7 +8132,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 54934,
+              "wire_id": 54937,
               "coefficient": "1"
             }
           ]
@@ -8128,11 +8146,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 55449,
+              "wire_id": 55452,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 55789,
+              "wire_id": 55792,
               "coefficient": "1"
             }
           ]
@@ -8146,7 +8164,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 55792,
+              "wire_id": 55795,
               "coefficient": "1"
             }
           ]
@@ -8160,11 +8178,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 56156,
+              "wire_id": 56159,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 56496,
+              "wire_id": 56499,
               "coefficient": "1"
             }
           ]
@@ -8178,11 +8196,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 56859,
+              "wire_id": 56862,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 57199,
+              "wire_id": 57202,
               "coefficient": "1"
             }
           ]
@@ -8196,7 +8214,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 347,
+              "wire_id": 350,
               "coefficient": "1"
             }
           ]
@@ -8205,7 +8223,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 348,
+              "wire_id": 351,
               "coefficient": "1"
             }
           ]
@@ -8214,7 +8232,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 187,
+              "wire_id": 190,
               "coefficient": "1"
             }
           ]
@@ -8223,11 +8241,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 56156,
+              "wire_id": 56159,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 56496,
+              "wire_id": 56499,
               "coefficient": "1"
             }
           ]
@@ -8236,11 +8254,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 56859,
+              "wire_id": 56862,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 57199,
+              "wire_id": 57202,
               "coefficient": "1"
             }
           ]
@@ -8254,31 +8272,31 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 57599,
+              "wire_id": 57602,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 57604,
+              "wire_id": 57607,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 57609,
+              "wire_id": 57612,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 57614,
+              "wire_id": 57617,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 57619,
+              "wire_id": 57622,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             },
             {
-              "wire_id": 57624,
+              "wire_id": 57627,
               "coefficient": "7794887768703111160845069174259889105885445540142212764247907805462223912961"
             },
             {
-              "wire_id": 57629,
+              "wire_id": 57632,
               "coefficient": "7841285910183486822516766014582864636277620811214487840225573923351880007681"
             }
           ]
@@ -8292,35 +8310,35 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 59478,
+              "wire_id": 59481,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 59483,
+              "wire_id": 59486,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 59488,
+              "wire_id": 59491,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 59493,
+              "wire_id": 59496,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             },
             {
-              "wire_id": 59498,
+              "wire_id": 59501,
               "coefficient": "7794887768703111160845069174259889105885445540142212764247907805462223912961"
             },
             {
-              "wire_id": 59503,
+              "wire_id": 59506,
               "coefficient": "7841285910183486822516766014582864636277620811214487840225573923351880007681"
             },
             {
-              "wire_id": 59508,
+              "wire_id": 59511,
               "coefficient": "7881497632799812395965569942862776762617506046143792906072884558856248623105"
             },
             {
-              "wire_id": 59513,
+              "wire_id": 59516,
               "coefficient": "7916682890089097272733273380107699873164905626706934838689281364922571161601"
             }
           ]
@@ -8334,23 +8352,23 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 65285,
+              "wire_id": 65288,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             },
             {
-              "wire_id": 65290,
+              "wire_id": 65293,
               "coefficient": "7238110070938603220784707090384182741179342287274911852515914390786350776321"
             },
             {
-              "wire_id": 65295,
+              "wire_id": 65298,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 65300,
+              "wire_id": 65303,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 65305,
+              "wire_id": 65308,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             }
           ]
@@ -8364,7 +8382,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 354,
+              "wire_id": 357,
               "coefficient": "1"
             }
           ]
@@ -8373,7 +8391,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 355,
+              "wire_id": 358,
               "coefficient": "1"
             }
           ]
@@ -8387,7 +8405,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 348,
+              "wire_id": 351,
               "coefficient": "1"
             }
           ]
@@ -8401,11 +8419,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 56156,
+              "wire_id": 56159,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 56496,
+              "wire_id": 56499,
               "coefficient": "1"
             }
           ]
@@ -8419,11 +8437,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 56859,
+              "wire_id": 56862,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 57199,
+              "wire_id": 57202,
               "coefficient": "1"
             }
           ]
@@ -8437,7 +8455,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 420,
+              "wire_id": 423,
               "coefficient": "1"
             }
           ]
@@ -8446,7 +8464,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 421,
+              "wire_id": 424,
               "coefficient": "1"
             }
           ]
@@ -8455,7 +8473,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 187,
+              "wire_id": 190,
               "coefficient": "1"
             }
           ]
@@ -8464,11 +8482,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 893,
+              "wire_id": 896,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 1233,
+              "wire_id": 1236,
               "coefficient": "1"
             }
           ]
@@ -8477,11 +8495,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 1596,
+              "wire_id": 1599,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 1936,
+              "wire_id": 1939,
               "coefficient": "1"
             }
           ]
@@ -8495,31 +8513,31 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 73080,
+              "wire_id": 73083,
               "coefficient": "7388904030749824121217721821433853214953911918259805849443329273927733084161"
             },
             {
-              "wire_id": 73085,
+              "wire_id": 73088,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 73090,
+              "wire_id": 73093,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 73095,
+              "wire_id": 73098,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 73100,
+              "wire_id": 73103,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             },
             {
-              "wire_id": 73105,
+              "wire_id": 73108,
               "coefficient": "7794887768703111160845069174259889105885445540142212764247907805462223912961"
             },
             {
-              "wire_id": 73110,
+              "wire_id": 73113,
               "coefficient": "7841285910183486822516766014582864636277620811214487840225573923351880007681"
             }
           ]
@@ -8533,7 +8551,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 84995,
+              "wire_id": 84998,
               "coefficient": "1"
             }
           ]
@@ -8547,11 +8565,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 97948,
+              "wire_id": 97951,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 98288,
+              "wire_id": 98291,
               "coefficient": "1"
             }
           ]
@@ -8565,11 +8583,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 98651,
+              "wire_id": 98654,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 98991,
+              "wire_id": 98994,
               "coefficient": "1"
             }
           ]
@@ -8583,11 +8601,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 99354,
+              "wire_id": 99357,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 99694,
+              "wire_id": 99697,
               "coefficient": "1"
             }
           ]
@@ -8601,11 +8619,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 100057,
+              "wire_id": 100060,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 100397,
+              "wire_id": 100400,
               "coefficient": "1"
             }
           ]
@@ -8619,15 +8637,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 100652,
+              "wire_id": 100655,
               "coefficient": "6333346312071277818186618704086159898531924501365547870951425091938056929281"
             },
             {
-              "wire_id": 100657,
+              "wire_id": 100660,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 100662,
+              "wire_id": 100665,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             }
           ]
@@ -8641,15 +8659,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 100917,
+              "wire_id": 100920,
               "coefficient": "6333346312071277818186618704086159898531924501365547870951425091938056929281"
             },
             {
-              "wire_id": 100922,
+              "wire_id": 100925,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 100927,
+              "wire_id": 100930,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             }
           ]
@@ -8663,15 +8681,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 101182,
+              "wire_id": 101185,
               "coefficient": "6333346312071277818186618704086159898531924501365547870951425091938056929281"
             },
             {
-              "wire_id": 101187,
+              "wire_id": 101190,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 101192,
+              "wire_id": 101195,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             }
           ]
@@ -8685,15 +8703,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 101447,
+              "wire_id": 101450,
               "coefficient": "6333346312071277818186618704086159898531924501365547870951425091938056929281"
             },
             {
-              "wire_id": 101452,
+              "wire_id": 101455,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 101457,
+              "wire_id": 101460,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             }
           ]
@@ -8707,15 +8725,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 101712,
+              "wire_id": 101715,
               "coefficient": "6333346312071277818186618704086159898531924501365547870951425091938056929281"
             },
             {
-              "wire_id": 101717,
+              "wire_id": 101720,
               "coefficient": "6755569399542696339399059951025237225100719468123251062348186764733927391233"
             },
             {
-              "wire_id": 101722,
+              "wire_id": 101725,
               "coefficient": "7037051457856975353540687448984622109479916112628386523279361213264507699201"
             }
           ]
@@ -8729,11 +8747,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 109035,
+              "wire_id": 109038,
               "coefficient": "1"
             },
             {
-              "wire_id": 109043,
+              "wire_id": 109046,
               "coefficient": "1"
             }
           ]
@@ -8742,11 +8760,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 109036,
+              "wire_id": 109039,
               "coefficient": "1"
             },
             {
-              "wire_id": 109044,
+              "wire_id": 109047,
               "coefficient": "1"
             }
           ]
@@ -8760,11 +8778,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 106277,
+              "wire_id": 106280,
               "coefficient": "1"
             },
             {
-              "wire_id": 106285,
+              "wire_id": 106288,
               "coefficient": "1"
             }
           ]
@@ -8773,11 +8791,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 106278,
+              "wire_id": 106281,
               "coefficient": "1"
             },
             {
-              "wire_id": 106286,
+              "wire_id": 106289,
               "coefficient": "1"
             }
           ]
@@ -8791,15 +8809,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 106277,
+              "wire_id": 106280,
               "coefficient": "1"
             },
             {
-              "wire_id": 106285,
+              "wire_id": 106288,
               "coefficient": "1"
             },
             {
-              "wire_id": 109045,
+              "wire_id": 109048,
               "coefficient": "1"
             }
           ]
@@ -8808,15 +8826,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 106278,
+              "wire_id": 106281,
               "coefficient": "1"
             },
             {
-              "wire_id": 106286,
+              "wire_id": 106289,
               "coefficient": "1"
             },
             {
-              "wire_id": 109046,
+              "wire_id": 109049,
               "coefficient": "1"
             }
           ]
@@ -8830,11 +8848,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 116359,
+              "wire_id": 116362,
               "coefficient": "1"
             },
             {
-              "wire_id": 116367,
+              "wire_id": 116370,
               "coefficient": "1"
             }
           ]
@@ -8843,11 +8861,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 116360,
+              "wire_id": 116363,
               "coefficient": "1"
             },
             {
-              "wire_id": 116368,
+              "wire_id": 116371,
               "coefficient": "1"
             }
           ]
@@ -8861,11 +8879,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 113601,
+              "wire_id": 113604,
               "coefficient": "1"
             },
             {
-              "wire_id": 113609,
+              "wire_id": 113612,
               "coefficient": "1"
             }
           ]
@@ -8874,11 +8892,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 113602,
+              "wire_id": 113605,
               "coefficient": "1"
             },
             {
-              "wire_id": 113610,
+              "wire_id": 113613,
               "coefficient": "1"
             }
           ]
@@ -8892,15 +8910,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 113601,
+              "wire_id": 113604,
               "coefficient": "1"
             },
             {
-              "wire_id": 113609,
+              "wire_id": 113612,
               "coefficient": "1"
             },
             {
-              "wire_id": 116369,
+              "wire_id": 116372,
               "coefficient": "1"
             }
           ]
@@ -8909,15 +8927,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 113602,
+              "wire_id": 113605,
               "coefficient": "1"
             },
             {
-              "wire_id": 113610,
+              "wire_id": 113613,
               "coefficient": "1"
             },
             {
-              "wire_id": 116370,
+              "wire_id": 116373,
               "coefficient": "1"
             }
           ]
@@ -8931,11 +8949,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 123683,
+              "wire_id": 123686,
               "coefficient": "1"
             },
             {
-              "wire_id": 123691,
+              "wire_id": 123694,
               "coefficient": "1"
             }
           ]
@@ -8944,11 +8962,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 123684,
+              "wire_id": 123687,
               "coefficient": "1"
             },
             {
-              "wire_id": 123692,
+              "wire_id": 123695,
               "coefficient": "1"
             }
           ]
@@ -8962,11 +8980,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 120925,
+              "wire_id": 120928,
               "coefficient": "1"
             },
             {
-              "wire_id": 120933,
+              "wire_id": 120936,
               "coefficient": "1"
             }
           ]
@@ -8975,11 +8993,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 120926,
+              "wire_id": 120929,
               "coefficient": "1"
             },
             {
-              "wire_id": 120934,
+              "wire_id": 120937,
               "coefficient": "1"
             }
           ]
@@ -8993,15 +9011,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 120925,
+              "wire_id": 120928,
               "coefficient": "1"
             },
             {
-              "wire_id": 120933,
+              "wire_id": 120936,
               "coefficient": "1"
             },
             {
-              "wire_id": 123693,
+              "wire_id": 123696,
               "coefficient": "1"
             }
           ]
@@ -9010,15 +9028,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 120926,
+              "wire_id": 120929,
               "coefficient": "1"
             },
             {
-              "wire_id": 120934,
+              "wire_id": 120937,
               "coefficient": "1"
             },
             {
-              "wire_id": 123694,
+              "wire_id": 123697,
               "coefficient": "1"
             }
           ]
@@ -9032,11 +9050,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 131007,
+              "wire_id": 131010,
               "coefficient": "1"
             },
             {
-              "wire_id": 131015,
+              "wire_id": 131018,
               "coefficient": "1"
             }
           ]
@@ -9045,11 +9063,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 131008,
+              "wire_id": 131011,
               "coefficient": "1"
             },
             {
-              "wire_id": 131016,
+              "wire_id": 131019,
               "coefficient": "1"
             }
           ]
@@ -9063,11 +9081,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 128249,
+              "wire_id": 128252,
               "coefficient": "1"
             },
             {
-              "wire_id": 128257,
+              "wire_id": 128260,
               "coefficient": "1"
             }
           ]
@@ -9076,11 +9094,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 128250,
+              "wire_id": 128253,
               "coefficient": "1"
             },
             {
-              "wire_id": 128258,
+              "wire_id": 128261,
               "coefficient": "1"
             }
           ]
@@ -9094,15 +9112,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 128249,
+              "wire_id": 128252,
               "coefficient": "1"
             },
             {
-              "wire_id": 128257,
+              "wire_id": 128260,
               "coefficient": "1"
             },
             {
-              "wire_id": 131017,
+              "wire_id": 131020,
               "coefficient": "1"
             }
           ]
@@ -9111,15 +9129,15 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 128250,
+              "wire_id": 128253,
               "coefficient": "1"
             },
             {
-              "wire_id": 128258,
+              "wire_id": 128261,
               "coefficient": "1"
             },
             {
-              "wire_id": 131018,
+              "wire_id": 131021,
               "coefficient": "1"
             }
           ]
@@ -9133,7 +9151,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 185,
+              "wire_id": 188,
               "coefficient": "1"
             }
           ]
@@ -9142,7 +9160,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 267,
+              "wire_id": 270,
               "coefficient": "1"
             }
           ]
@@ -9156,7 +9174,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 348,
+              "wire_id": 351,
               "coefficient": "1"
             }
           ]
@@ -9165,7 +9183,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 421,
+              "wire_id": 424,
               "coefficient": "1"
             }
           ]
@@ -9179,7 +9197,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 145979,
+              "wire_id": 157286,
               "coefficient": "1"
             }
           ]
@@ -9188,7 +9206,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 145980,
+              "wire_id": 157287,
               "coefficient": "1"
             }
           ]
@@ -9202,11 +9220,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 146343,
+              "wire_id": 157650,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 146683,
+              "wire_id": 157990,
               "coefficient": "1"
             }
           ]
@@ -9234,7 +9252,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 346,
+              "wire_id": 349,
               "coefficient": "1"
             }
           ]
@@ -9248,7 +9266,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 349,
+              "wire_id": 352,
               "coefficient": "1"
             }
           ]
@@ -9262,7 +9280,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 419,
+              "wire_id": 422,
               "coefficient": "1"
             }
           ]
@@ -9276,7 +9294,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 422,
+              "wire_id": 425,
               "coefficient": "1"
             }
           ]
@@ -9290,11 +9308,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 146343,
+              "wire_id": 157650,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 146683,
+              "wire_id": 157990,
               "coefficient": "1"
             }
           ]
@@ -9364,7 +9382,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 433,
+              "wire_id": 436,
               "coefficient": "1"
             }
           ]
@@ -9378,7 +9396,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 434,
+              "wire_id": 437,
               "coefficient": "1"
             }
           ]
@@ -9392,7 +9410,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 435,
+              "wire_id": 438,
               "coefficient": "1"
             }
           ]
@@ -9406,7 +9424,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 436,
+              "wire_id": 439,
               "coefficient": "1"
             }
           ]
@@ -9420,7 +9438,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 181,
+              "wire_id": 184,
               "coefficient": "1"
             }
           ]
@@ -9434,11 +9452,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 42817,
+              "wire_id": 42820,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 43157,
+              "wire_id": 43160,
               "coefficient": "1"
             }
           ]
@@ -9452,7 +9470,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 262,
+              "wire_id": 265,
               "coefficient": "1"
             }
           ]
@@ -9466,7 +9484,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 263,
+              "wire_id": 266,
               "coefficient": "1"
             }
           ]
@@ -9480,11 +9498,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 55449,
+              "wire_id": 55452,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 55789,
+              "wire_id": 55792,
               "coefficient": "1"
             }
           ]
@@ -9498,7 +9516,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 345,
+              "wire_id": 348,
               "coefficient": "1"
             }
           ]
@@ -9540,7 +9558,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 142,
+              "wire_id": 145,
               "coefficient": "1"
             }
           ]
@@ -9554,7 +9572,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 143,
+              "wire_id": 146,
               "coefficient": "1"
             }
           ]
@@ -9568,7 +9586,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 144,
+              "wire_id": 147,
               "coefficient": "1"
             }
           ]
@@ -9582,7 +9600,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 145,
+              "wire_id": 148,
               "coefficient": "1"
             }
           ]
@@ -9596,11 +9614,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 97948,
+              "wire_id": 97951,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 98288,
+              "wire_id": 98291,
               "coefficient": "1"
             }
           ]
@@ -9614,7 +9632,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 161,
+              "wire_id": 164,
               "coefficient": "1"
             }
           ]
@@ -9628,7 +9646,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 163,
+              "wire_id": 166,
               "coefficient": "1"
             }
           ]
@@ -9642,11 +9660,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 98651,
+              "wire_id": 98654,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 98991,
+              "wire_id": 98994,
               "coefficient": "1"
             }
           ]
@@ -9660,7 +9678,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 166,
+              "wire_id": 169,
               "coefficient": "1"
             }
           ]
@@ -9674,7 +9692,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 167,
+              "wire_id": 170,
               "coefficient": "1"
             }
           ]
@@ -9688,7 +9706,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 168,
+              "wire_id": 171,
               "coefficient": "1"
             }
           ]
@@ -9702,7 +9720,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 169,
+              "wire_id": 172,
               "coefficient": "1"
             }
           ]
@@ -9716,11 +9734,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 99354,
+              "wire_id": 99357,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 99694,
+              "wire_id": 99697,
               "coefficient": "1"
             }
           ]
@@ -9734,7 +9752,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 172,
+              "wire_id": 175,
               "coefficient": "1"
             }
           ]
@@ -9748,7 +9766,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 174,
+              "wire_id": 177,
               "coefficient": "1"
             }
           ]
@@ -9762,11 +9780,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 100057,
+              "wire_id": 100060,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 100397,
+              "wire_id": 100400,
               "coefficient": "1"
             }
           ]
@@ -9780,7 +9798,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 177,
+              "wire_id": 180,
               "coefficient": "1"
             }
           ]
@@ -9794,7 +9812,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 178,
+              "wire_id": 181,
               "coefficient": "1"
             }
           ]
@@ -9808,7 +9826,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 179,
+              "wire_id": 182,
               "coefficient": "1"
             }
           ]
@@ -9822,7 +9840,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 180,
+              "wire_id": 183,
               "coefficient": "1"
             }
           ]
@@ -9850,7 +9868,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 162,
+              "wire_id": 165,
               "coefficient": "1"
             }
           ]
@@ -9864,7 +9882,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 173,
+              "wire_id": 176,
               "coefficient": "1"
             }
           ]
@@ -9878,7 +9896,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 146,
+              "wire_id": 141,
               "coefficient": "1"
             }
           ]
@@ -9892,7 +9910,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 147,
+              "wire_id": 142,
               "coefficient": "1"
             }
           ]
@@ -9906,7 +9924,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 148,
+              "wire_id": 143,
               "coefficient": "1"
             }
           ]
@@ -9934,7 +9952,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 151,
+              "wire_id": 150,
               "coefficient": "1"
             }
           ]
@@ -9948,7 +9966,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 152,
+              "wire_id": 151,
               "coefficient": "1"
             }
           ]
@@ -9962,7 +9980,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 153,
+              "wire_id": 152,
               "coefficient": "1"
             }
           ]
@@ -9977,6 +9995,48 @@
           "terms": [
             {
               "wire_id": 154,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "statement.field.053",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 155,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "statement.field.054",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 156,
+              "coefficient": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "statement.field.055",
+      "expressions": [
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 157,
               "coefficient": "1"
             }
           ]
@@ -9999,15 +10059,6 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 346,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
               "wire_id": 349,
               "coefficient": "1"
             }
@@ -10017,7 +10068,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 419,
+              "wire_id": 352,
               "coefficient": "1"
             }
           ]
@@ -10035,11 +10086,20 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 146343,
+              "wire_id": 425,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 157650,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 146683,
+              "wire_id": 157990,
               "coefficient": "1"
             }
           ]
@@ -10084,33 +10144,6 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 433,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 434,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 435,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
               "wire_id": 436,
               "coefficient": "1"
             }
@@ -10120,7 +10153,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 181,
+              "wire_id": 437,
               "coefficient": "1"
             }
           ]
@@ -10129,11 +10162,38 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 42817,
+              "wire_id": 438,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 439,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 184,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 42820,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 43157,
+              "wire_id": 43160,
               "coefficient": "1"
             }
           ]
@@ -10142,7 +10202,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 262,
+              "wire_id": 265,
               "coefficient": "1"
             }
           ]
@@ -10151,7 +10211,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 263,
+              "wire_id": 266,
               "coefficient": "1"
             }
           ]
@@ -10160,11 +10220,11 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 55449,
+              "wire_id": 55452,
               "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
             },
             {
-              "wire_id": 55789,
+              "wire_id": 55792,
               "coefficient": "1"
             }
           ]
@@ -10173,7 +10233,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 345,
+              "wire_id": 348,
               "coefficient": "1"
             }
           ]
@@ -10200,221 +10260,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 142,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 143,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 144,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
               "wire_id": 145,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 97948,
-              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
-            },
-            {
-              "wire_id": 98288,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 161,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 163,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 98651,
-              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
-            },
-            {
-              "wire_id": 98991,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 166,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 167,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 168,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 169,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 99354,
-              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
-            },
-            {
-              "wire_id": 99694,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 172,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 174,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 100057,
-              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
-            },
-            {
-              "wire_id": 100397,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 177,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 178,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 179,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 180,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 9,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 162,
-              "coefficient": "1"
-            }
-          ]
-        },
-        {
-          "constant": "0",
-          "terms": [
-            {
-              "wire_id": 173,
               "coefficient": "1"
             }
           ]
@@ -10450,7 +10296,230 @@
           "constant": "0",
           "terms": [
             {
+              "wire_id": 97951,
+              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
+            },
+            {
+              "wire_id": 98291,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 164,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 166,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 98654,
+              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
+            },
+            {
+              "wire_id": 98994,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 169,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 170,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 171,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 172,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 99357,
+              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
+            },
+            {
+              "wire_id": 99697,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 175,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 177,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 100060,
+              "coefficient": "8444461749428370424248824938781546531375899335154063827935233455917409239040"
+            },
+            {
+              "wire_id": 100400,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 180,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 181,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 182,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 183,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 9,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 165,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 176,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 141,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 142,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 143,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
               "wire_id": 149,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 150,
               "coefficient": "1"
             }
           ]
@@ -10477,7 +10546,7 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 153,
+              "wire_id": 154,
               "coefficient": "1"
             }
           ]
@@ -10486,7 +10555,25 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 154,
+              "wire_id": 155,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 156,
+              "coefficient": "1"
+            }
+          ]
+        },
+        {
+          "constant": "0",
+          "terms": [
+            {
+              "wire_id": 157,
               "coefficient": "1"
             }
           ]
@@ -10500,35 +10587,35 @@
           "constant": "0",
           "terms": [
             {
-              "wire_id": 150868,
+              "wire_id": 162630,
               "coefficient": "4691367638571316902360458299323081406319944075085591015519574142176338466134"
             },
             {
-              "wire_id": 150873,
+              "wire_id": 162635,
               "coefficient": "7600015574485533381823942444903391878238309401638657445141710110325668315137"
             },
             {
-              "wire_id": 150878,
+              "wire_id": 162640,
               "coefficient": "2303035022571373752067861346940421781284336182314744680345972760704747974284"
             },
             {
-              "wire_id": 150883,
+              "wire_id": 162645,
               "coefficient": "7740756603642672888894756193883084320427907723891225175607297334590958469121"
             },
             {
-              "wire_id": 150888,
+              "wire_id": 162650,
               "coefficient": "7794887768703111160845069174259889105885445540142212764247907805462223912961"
             },
             {
-              "wire_id": 150893,
+              "wire_id": 162655,
               "coefficient": "7841285910183486822516766014582864636277620811214487840225573923351880007681"
             },
             {
-              "wire_id": 150898,
+              "wire_id": 162660,
               "coefficient": "7881497632799812395965569942862776762617506046143792906072884558856248623105"
             },
             {
-              "wire_id": 150903,
+              "wire_id": 162665,
               "coefficient": "7916682890089097272733273380107699873164905626706934838689281364922571161601"
             }
           ]
@@ -11960,8 +12047,8 @@
         "out=compliance.output_ext.ciphertext"
       ],
       "start": 149062,
-      "end": 151918,
-      "constraint_count": 2856
+      "end": 164254,
+      "constraint_count": 15192
     },
     {
       "index": 116,
@@ -11969,8 +12056,8 @@
       "args": [
         "metadata=compliance.metadata"
       ],
-      "start": 151918,
-      "end": 151918,
+      "start": 164254,
+      "end": 164254,
       "constraint_count": 0
     },
     {
@@ -11980,8 +12067,8 @@
         "lhs=compliance.metadata.ring_id_hash",
         "rhs=effective.ring_id_hash"
       ],
-      "start": 151918,
-      "end": 151919,
+      "start": 164254,
+      "end": 164255,
       "constraint_count": 1
     },
     {
@@ -11991,8 +12078,8 @@
         "lhs=compliance.metadata.policy_id_hash",
         "rhs=effective.policy_id_hash"
       ],
-      "start": 151919,
-      "end": 151920,
+      "start": 164255,
+      "end": 164256,
       "constraint_count": 1
     },
     {
@@ -12002,8 +12089,8 @@
         "lhs=compliance.metadata.resource_hash",
         "rhs=effective.resource_hash"
       ],
-      "start": 151920,
-      "end": 151921,
+      "start": 164256,
+      "end": 164257,
       "constraint_count": 1
     },
     {
@@ -12013,8 +12100,8 @@
         "lhs=compliance.metadata.permission_hash",
         "rhs=effective.permission_hash"
       ],
-      "start": 151921,
-      "end": 151922,
+      "start": 164257,
+      "end": 164258,
       "constraint_count": 1
     },
     {
@@ -12024,8 +12111,8 @@
         "lhs=compliance.metadata.target_timestamp",
         "rhs=target_timestamp"
       ],
-      "start": 151922,
-      "end": 151923,
+      "start": 164258,
+      "end": 164259,
       "constraint_count": 1
     },
     {
@@ -12035,8 +12122,8 @@
         "lhs=compliance.metadata.sender_core_salt",
         "rhs=salt1"
       ],
-      "start": 151923,
-      "end": 151924,
+      "start": 164259,
+      "end": 164260,
       "constraint_count": 1
     },
     {
@@ -12046,8 +12133,8 @@
         "lhs=compliance.metadata.sender_ext_salt",
         "rhs=salt2"
       ],
-      "start": 151924,
-      "end": 151925,
+      "start": 164260,
+      "end": 164261,
       "constraint_count": 1
     },
     {
@@ -12057,8 +12144,8 @@
         "lhs=compliance.metadata.output_core_salt",
         "rhs=salt3"
       ],
-      "start": 151925,
-      "end": 151926,
+      "start": 164261,
+      "end": 164262,
       "constraint_count": 1
     },
     {
@@ -12068,8 +12155,8 @@
         "lhs=compliance.metadata.output_ext_salt",
         "rhs=salt4"
       ],
-      "start": 151926,
-      "end": 151927,
+      "start": 164262,
+      "end": 164263,
       "constraint_count": 1
     },
     {
@@ -12080,8 +12167,8 @@
         "tier_ciphertexts-\u003estatement",
         "metadata-\u003estatement"
       ],
-      "start": 151927,
-      "end": 151927,
+      "start": 164263,
+      "end": 164263,
       "constraint_count": 0
     },
     {
@@ -12094,8 +12181,8 @@
         "blinding=action_balance_blinding",
         "out=balance_commitment.computed"
       ],
-      "start": 151927,
-      "end": 158129,
+      "start": 164263,
+      "end": 170465,
       "constraint_count": 6202
     },
     {
@@ -12105,8 +12192,8 @@
         "in=balance_commitment.computed",
         "out=balance_commitment.fq"
       ],
-      "start": 158129,
-      "end": 159175,
+      "start": 170465,
+      "end": 171511,
       "constraint_count": 1046
     },
     {
@@ -12116,8 +12203,8 @@
         "shape=transfer2x2",
         "fields=transfer_statement_fields"
       ],
-      "start": 159175,
-      "end": 159175,
+      "start": 171511,
+      "end": 171511,
       "constraint_count": 0
     },
     {
@@ -12128,9 +12215,9 @@
         "fields=statement_fields",
         "out=statement_hash"
       ],
-      "start": 159175,
-      "end": 163395,
-      "constraint_count": 4220
+      "start": 171511,
+      "end": 176186,
+      "constraint_count": 4675
     },
     {
       "index": 131,
@@ -12139,13 +12226,13 @@
         "lhs=statement_hash",
         "rhs=claimed_statement_hash"
       ],
-      "start": 163395,
-      "end": 163396,
+      "start": 176186,
+      "end": 176187,
       "constraint_count": 1
     }
   ],
   "breakdown": {
-    "total_constraints": 163396,
+    "total_constraints": 176187,
     "segments": 131
   }
 }

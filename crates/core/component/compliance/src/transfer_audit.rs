@@ -91,6 +91,10 @@ impl TransferTierCiphertext<'_> {
             "identity transfer shared point"
         );
         let seed = self.c2 - shared.vartime_compress_to_field();
+        self.decrypt_seed(seed)
+    }
+
+    pub(crate) fn decrypt_seed(&self, seed: Fq) -> Result<TransferAuditData> {
         let len: usize = if let Some(confirmation) = self.key_confirmation {
             ensure!(
                 transfer_key_confirmation(seed, self.epk.vartime_compress_to_field(), self.salt)
@@ -172,6 +176,7 @@ mod tests {
         for flagged in [false, true] {
             let encrypted = encrypt_transfer(
                 StdRng::seed_from_u64(17),
+                &ring_pk,
                 &(ring_pk * sender_d),
                 &(ring_pk * receiver_d),
                 &(Element::GENERATOR * dk),
@@ -187,6 +192,47 @@ mod tests {
                 metadata.output_core_salt().unwrap(),
             )
             .unwrap();
+            let decoded =
+                TransferComplianceCiphertext::from_bytes(&encrypted.ciphertext.to_bytes()).unwrap();
+            for selection in crate::master_wrapping::MasterSelection::ALL {
+                let selected = selection.tier().select(&decoded, &metadata).unwrap();
+                let shared = selected.epk * if flagged { dk } else { ring_sk };
+                let expected = match selection {
+                    crate::master_wrapping::MasterSelection::Amount => {
+                        TransferAuditData::Amount(amount)
+                    }
+                    crate::master_wrapping::MasterSelection::Sender => {
+                        TransferAuditData::Counterparty(AddressData {
+                            diversified_generator: *sender.diversified_generator(),
+                            transmission_key: sender.transmission_key().0,
+                        })
+                    }
+                    crate::master_wrapping::MasterSelection::Receiver => {
+                        TransferAuditData::Counterparty(AddressData {
+                            diversified_generator: *receiver.diversified_generator(),
+                            transmission_key: receiver.transmission_key().0,
+                        })
+                    }
+                };
+                assert_eq!(
+                    selection.decrypt(&decoded, &metadata, &shared).unwrap(),
+                    expected
+                );
+                assert_ne!(decoded.master_wrappings[selection as usize], selected.c2);
+                if flagged {
+                    assert!(selection
+                        .decrypt(&decoded, &metadata, &(selected.epk * ring_sk))
+                        .is_err());
+                }
+                for other in crate::master_wrapping::MasterSelection::ALL {
+                    if other != selection {
+                        assert!(other.decrypt(&decoded, &metadata, &shared).is_err());
+                    }
+                }
+                let mut changed = decoded.clone();
+                changed.master_wrappings[selection as usize] += Fq::from(1u64);
+                assert!(selection.decrypt(&changed, &metadata, &shared).is_err());
+            }
             for tier in [
                 TransferTier::SenderCore,
                 TransferTier::SenderExt,
@@ -215,6 +261,11 @@ mod tests {
                     }
                 };
                 assert_eq!(result, expected);
+                // Actual ordinary ciphertext uses the address-derived key for every tier.
+                // Possession of the base ring secret alone does not remove that derivation.
+                if !flagged {
+                    assert!(selected.decrypt(&(selected.epk * ring_sk)).is_err());
+                }
                 assert!(selected
                     .decrypt(&(selected.epk * (key + Fr::from(1u64))))
                     .is_err());

@@ -15,19 +15,19 @@ func DeriveSharedSecretsSpend(
 	dkPub gnarkte.Point,
 	isFlagged frontend.Variable,
 	publishedEPK gnarkte.Point,
-) (gnarkte.Point, gnarkte.Point, gnarkte.Point, error) {
+) (gnarkte.Point, gnarkte.Point, gnarkte.Point, []frontend.Variable, error) {
 	api.AssertIsBoolean(isFlagged)
 	curve, err := gnarkte.NewEdCurve(api, curves.BLS12_377)
 	if err != nil {
-		return gnarkte.Point{}, gnarkte.Point{}, gnarkte.Point{}, err
+		return gnarkte.Point{}, gnarkte.Point{}, gnarkte.Point{}, nil, err
 	}
 	generator, err := decafGeneratorPoint()
 	if err != nil {
-		return gnarkte.Point{}, gnarkte.Point{}, gnarkte.Point{}, err
+		return gnarkte.Point{}, gnarkte.Point{}, gnarkte.Point{}, nil, err
 	}
 	vectors, err := primitives.LoadPrototypeVectors()
 	if err != nil {
-		return gnarkte.Point{}, gnarkte.Point{}, gnarkte.Point{}, err
+		return gnarkte.Point{}, gnarkte.Point{}, gnarkte.Point{}, nil, err
 	}
 	nBits := primitives.MustBigInt(vectors.Decaf377CompanionCurve.Order).BitLen()
 	eskBits := api.ToBinary(esk, nBits)
@@ -41,5 +41,5 @@ func DeriveSharedSecretsSpend(
 		X: api.Select(isFlagged, ssIssuer.X, ssCoreUser.X),
 		Y: api.Select(isFlagged, ssIssuer.Y, ssCoreUser.Y),
 	}
-	return ssIssuer, ssCoreUser, ssCore, nil
+	return ssIssuer, ssCoreUser, ssCore, eskBits, nil
 }

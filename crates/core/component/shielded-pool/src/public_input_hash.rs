@@ -17,7 +17,7 @@ use crate::{
 pub const NOTE_RESHAPE_STATEMENT_BASE_FIELDS: usize = 7;
 pub const NOTE_RESHAPE_STATEMENT_FIELDS_PER_INPUT: usize = 3;
 pub const NOTE_RESHAPE_STATEMENT_FIELDS_PER_OUTPUT: usize = 2;
-pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 43;
+pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 46;
 pub const TRANSFER_STATEMENT_FIELDS_PER_INPUT: usize = 3;
 pub const TRANSFER_STATEMENT_FIELDS_PER_OUTPUT: usize = 2;
 pub const SHIELDED_WITHDRAWAL_STATEMENT_BASE_FIELDS: usize = 25;
@@ -378,6 +378,7 @@ pub fn transfer_statement_fields(
     );
     fields.push(compliance.sender_core_key_confirmation);
     fields.push(compliance.output_core_key_confirmation);
+    fields.extend(compliance.master_wrappings);
     let metadata = &compliance.metadata;
     metadata
         .validate()
@@ -843,14 +844,18 @@ mod tests {
             metadata.output_ext_salt().unwrap(),
         ];
         let metadata_start = fields.len() - expected_metadata.len();
-        assert_eq!(fields[metadata_start - 3], public.target_timestamp);
+        assert_eq!(fields[metadata_start - 6], public.target_timestamp);
         assert_eq!(
-            fields[metadata_start - 2],
+            fields[metadata_start - 5],
             public.compliance.sender_core_key_confirmation
         );
         assert_eq!(
-            fields[metadata_start - 1],
+            fields[metadata_start - 4],
             public.compliance.output_core_key_confirmation
+        );
+        assert_eq!(
+            &fields[metadata_start - 3..metadata_start],
+            &public.compliance.master_wrappings
         );
         assert_eq!(&fields[metadata_start..], expected_metadata.as_slice());
 

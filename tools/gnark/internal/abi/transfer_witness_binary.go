@@ -128,6 +128,7 @@ type TransferWitnessBinary struct {
 	DetectionCiphertext       [][32]byte
 	SenderCoreKeyConfirmation [32]byte
 	OutputCoreKeyConfirmation [32]byte
+	MasterWrappings           [3][32]byte
 	Metadata                  TransferComplianceMetadataWitnessBinary
 	SenderCore                TransferComplianceCiphertextWitnessBinary
 	SenderExt                 TransferComplianceCiphertextWitnessBinary
@@ -271,6 +272,11 @@ func decodeTransferWitness(
 	}
 	if witness.OutputCoreKeyConfirmation, err = read32(reader); err != nil {
 		return nil, err
+	}
+	for i := range witness.MasterWrappings {
+		if witness.MasterWrappings[i], err = read32(reader); err != nil {
+			return nil, err
+		}
 	}
 	if witness.Metadata, err = readTransferComplianceMetadata(reader); err != nil {
 		return nil, err

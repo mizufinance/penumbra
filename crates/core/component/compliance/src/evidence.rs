@@ -454,6 +454,7 @@ pub(crate) mod tests {
         let detection_salt = Fq::from(77u64);
         let encrypted = crate::encrypt_transfer(
             &mut OsRng,
+            &ring_pk,
             &derive_ack(&ring_pk, &sender),
             &derive_ack(&ring_pk, &receiver),
             &dk_pub,

@@ -167,7 +167,7 @@ Only the receiver output carries compliance data:
 
 ```text
 TransferOutputBody {
-  compliance_ciphertext: 704 bytes
+  compliance_ciphertext: 800 bytes
   compliance_metadata:   264 bytes
 }
 ```
@@ -262,7 +262,7 @@ keyed by height/hash/parent hash; a reorg rolls state back to the common
 ancestor before replay.
 
 The evidence object contains the output reference, asset/flag/detection facts,
-the 704-byte ciphertext, the 264-byte metadata record, and a payload hash. It
+the 800-byte ciphertext, the 264-byte metadata record, and a payload hash. It
 contains no capsule-release evidence, shared point, or standalone DLEQ proof. Evidence
 validation compares both ciphertext and metadata to the accepted output and
 the persisted detection row before an audit can complete.

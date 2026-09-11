@@ -117,10 +117,10 @@ func VerifyPoseidonEncryptionTransferAmount(
 	keyConfirmation frontend.Variable,
 	amount frontend.Variable,
 	ciphertext [TransferCoreCiphertextFQCount]frontend.Variable,
-) error {
+) (frontend.Variable, error) {
 	sharedSecretFq, err := decafgnark.CompressToField(api, sharedSecret)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	seed := api.Sub(c2, sharedSecretFq)
 	confirmation, err := primitives.Poseidon377Hash3(
@@ -129,15 +129,15 @@ func VerifyPoseidonEncryptionTransferAmount(
 		[3]frontend.Variable{seed, epkFq, tierSalt},
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	api.AssertIsEqual(confirmation, keyConfirmation)
 	keystream, err := complianceStreamBlock(api, seed, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	api.AssertIsEqual(api.Add(amount, keystream), ciphertext[0])
-	return nil
+	return seed, nil
 }
 
 func VerifyPoseidonEncryptionTransferAddress(
@@ -147,19 +147,19 @@ func VerifyPoseidonEncryptionTransferAddress(
 	diversifiedGeneratorFq frontend.Variable,
 	transmissionKeyFq frontend.Variable,
 	ciphertext [TransferExtCiphertextFQCount]frontend.Variable,
-) error {
+) (frontend.Variable, error) {
 	sharedSecretFq, err := decafgnark.CompressToField(api, sharedSecret)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	seed := api.Sub(c2, sharedSecretFq)
 	plaintexts := AddressPlaintextFQsFromCompressed(api, diversifiedGeneratorFq, transmissionKeyFq)
 	for i, plain := range plaintexts {
 		keystream, err := complianceStreamBlock(api, seed, i)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		api.AssertIsEqual(api.Add(plain, keystream), ciphertext[i])
 	}
-	return nil
+	return seed, nil
 }
