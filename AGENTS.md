@@ -57,7 +57,7 @@ For task-specific code, ownership and commands, start at [docs/README.md](docs/R
 - Check available memory, swap pressure, disk space, and existing workloads before heavy verification; monitor during it. If memory pressure, sustained swapping, severe slowdown, or Docker unresponsiveness appears, stop this task's heavy jobs immediately. Do not terminate unrelated user processes or restart Docker globally.
 - Reuse build caches and completed verification. Repeat checks only for relevant changes, failures, or unresolved concerns; avoid concurrent builds with separate target directories to bypass Cargo's lock.
 - Do not edit scripts while they are executing. Finish or stop the invocation before changing and rerunning them.
-- After a crash or resource-related interruption, keep heavy verification paused until the user explicitly resumes it. Report interrupted checks as incomplete and resume with reduced concurrency; never restart the previous workload automatically.
+- After a crash or resource-related interruption, diagnose the cause before retrying. Report interrupted checks as incomplete, address the cause, and resume cautiously with reduced concurrency and resource monitoring. Do not blindly restart the same workload; stop again if pressure or instability returns.
 
 ## Style
 
