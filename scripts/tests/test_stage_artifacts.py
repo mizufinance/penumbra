@@ -22,13 +22,16 @@ class StagedArtifactsTests(unittest.TestCase):
                        ("transfer", "note_reshape", "shielded_withdrawal")}
             for name in current | {"libshieldd_gnark_retired.dylib"}:
                 (libraries / name).write_bytes(name.encode())
+            (out / "proof_artifact_provenance.json").write_text(json.dumps({"approved": True, "debug_assertions": False}))
             events = [{"reason": "build-script-executed",
-                       "package_id": "shieldd-sdk-proof-params", "out_dir": str(out)}]
+                       "package_id": "shieldd-sdk-proof-params", "out_dir": str(out)},
+                      {"reason": "compiler-artifact", "target": {"name": "shieldd_sdk_proof_params"},
+                       "profile": {"debug_assertions": False}}]
             for name in stage.GROUPS["provers"]:
                 binary = root / name
                 binary.write_bytes(name.encode())
                 events.append({"reason": "compiler-artifact", "target": {"name": name},
-                               "executable": str(binary)})
+                               "executable": str(binary), "profile": {"debug_assertions": False}})
             process = Mock(stdout=[json.dumps(event) for event in events])
             process.wait.return_value = 0
             destination = root / "stage"
@@ -46,7 +49,7 @@ class StagedArtifactsTests(unittest.TestCase):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(name.encode())
                     files[name] = stage.digest(path)
-                manifest = {"source_revision": "a" * 40, "target": "test-target", "groups": ["native"], "files": files}
+                manifest = {"source_revision": "a" * 40, "target": "test-target", "groups": ["native"], "files": files, "provenance": {"native": {"profile": "release", "debug_assertions": False, "proof_parameters": {"approved": True, "debug_assertions": False}}}}
                 revision, target = "a" * 40, "test-target"
                 if case == "revision": revision = "b" * 40
                 if case == "platform": target = "other-target"

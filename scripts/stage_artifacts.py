@@ -90,11 +90,14 @@ def build(group, output, source_revision, target, profile="release"):
     copies = {}
     profiles = {}
     proof_provenance = None
+    proof_debug = None
     process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True)
     for line in process.stdout:
         event = json.loads(line)
         if event.get("reason") == "compiler-artifact":
             name = event["target"]["name"]
+            if name == "shieldd_sdk_proof_params":
+                proof_debug = event["profile"]["debug_assertions"]
             if name not in GROUPS[group]:
                 continue
             profiles[name] = event["profile"]["debug_assertions"]
@@ -111,8 +114,9 @@ def build(group, output, source_revision, target, profile="release"):
                     copies[f"lib/gnark/{library.name}"] = library
     if process.wait():
         raise RuntimeError("artifact build failed")
-    if set(profiles) != set(GROUPS[group]) or proof_provenance is None:
+    if set(profiles) != set(GROUPS[group]) or proof_provenance is None or not isinstance(proof_debug, bool):
         raise ValueError("build did not provide compiler and proof provenance")
+    proof_provenance["debug_assertions"] = proof_debug
     expected = {"lib/libshieldd.a"} if group == "native" else {f"bin/{name}" for name in GROUPS[group]}
     if not expected.issubset(copies):
         raise ValueError(f"build did not produce {sorted(expected - copies.keys())}")
