@@ -2,6 +2,7 @@ use anyhow::{ensure, Result};
 use ark_ff::{BigInteger, PrimeField};
 use decaf377::{Element, Fr};
 use once_cell::sync::Lazy;
+use rand_core::{CryptoRng, RngCore};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DleqProof {
@@ -24,6 +25,61 @@ static ISSUER_DLEQ_DOMAIN: Lazy<decaf377::Fq> =
     Lazy::new(|| decaf377::Fq::from_le_bytes_mod_order(b"shieldd.issuer.dh_evidence.dleq.v1\0"));
 
 impl IssuerDhEvidence {
+    /// Produce verifiable decryption access for one ciphertext without exporting DK.
+    pub fn prove(
+        mut rng: impl RngCore + CryptoRng,
+        dk: &crate::DetectionKey,
+        asset_id: [u8; 32],
+        ciphertext_epk: Element,
+    ) -> Result<Self> {
+        decaf377::Fq::from_bytes_checked(&asset_id)
+            .map_err(|_| anyhow::anyhow!("issuer evidence asset ID is not canonical"))?;
+        ensure_nonidentity("issuer ciphertext_epk", ciphertext_epk)?;
+        ensure_nonidentity("issuer_dk_pub", dk.public_key())?;
+        let nonce = loop {
+            let nonce = Fr::rand(&mut rng);
+            if nonce != Fr::from(0u64) {
+                break nonce;
+            }
+        };
+        let mut evidence = Self {
+            version: 1,
+            asset_id,
+            ciphertext_epk,
+            issuer_dk_pub: dk.public_key(),
+            shared_point: ciphertext_epk * dk.0,
+            proof: DleqProof {
+                commitment_g: Element::GENERATOR * nonce,
+                commitment_h: ciphertext_epk * nonce,
+                response: Fr::from(0u64),
+            },
+        };
+        evidence.proof.response = nonce + issuer_challenge(&evidence) * dk.0;
+        Ok(evidence)
+    }
+
+    /// Expected asset, registered issuer key and EPK must come from accepted chain data.
+    pub fn verify_for(
+        &self,
+        asset_id: [u8; 32],
+        issuer_dk_pub: Element,
+        ciphertext_epk: Element,
+    ) -> Result<Element> {
+        ensure!(
+            self.asset_id == asset_id,
+            "issuer disclosure asset mismatch"
+        );
+        ensure!(
+            self.issuer_dk_pub == issuer_dk_pub,
+            "issuer disclosure key mismatch"
+        );
+        ensure!(
+            self.ciphertext_epk == ciphertext_epk,
+            "issuer disclosure ciphertext mismatch"
+        );
+        self.verify()
+    }
+
     pub fn verify(&self) -> Result<Element> {
         ensure!(self.version == 1, "unsupported issuer DH evidence version");
         decaf377::Fq::from_bytes_checked(&self.asset_id)
@@ -141,5 +197,27 @@ mod tests {
         let mut wrong_shared = evidence;
         wrong_shared.shared_point += Element::GENERATOR;
         assert!(wrong_shared.verify().is_err());
+    }
+
+    #[test]
+    fn issuer_disclosure_uses_fresh_proof_and_pinned_chain_values() {
+        let dk = crate::DetectionKey::new(Fr::from(5u64));
+        let epk = Element::GENERATOR * Fr::from(7u64);
+        let asset = decaf377::Fq::from(11u64).to_bytes();
+        let first = IssuerDhEvidence::prove(rand_core::OsRng, &dk, asset, epk).unwrap();
+        let second = IssuerDhEvidence::prove(rand_core::OsRng, &dk, asset, epk).unwrap();
+        assert_ne!(first.proof.commitment_g, second.proof.commitment_g);
+        assert_eq!(
+            first.verify_for(asset, dk.public_key(), epk).unwrap(),
+            epk * dk.0
+        );
+        assert!(first.verify_for(asset, Element::GENERATOR, epk).is_err());
+        assert!(first
+            .verify_for(asset, dk.public_key(), Element::GENERATOR)
+            .is_err());
+        assert!(first
+            .verify_for(decaf377::Fq::from(12u64).to_bytes(), dk.public_key(), epk)
+            .is_err());
+        assert!(IssuerDhEvidence::prove(rand_core::OsRng, &dk, asset, Element::default()).is_err());
     }
 }
