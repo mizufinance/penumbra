@@ -333,6 +333,7 @@ func ReconstructedTransferStatementFieldsFromWitness(
 		witness.MasterWrappings[0],
 		witness.MasterWrappings[1],
 		witness.MasterWrappings[2],
+		witness.Metadata.AuditEpoch,
 		witness.Metadata.RingIDHash,
 		witness.Metadata.PolicyIDHash,
 		witness.Metadata.ResourceHash,

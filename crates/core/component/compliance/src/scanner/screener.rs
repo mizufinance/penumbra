@@ -106,21 +106,11 @@ impl ComplianceScreener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::derive_compliance_scalar;
     use crate::test_helpers::make_address;
     use crate::transfer::encrypt_transfer;
     use rand_core::OsRng;
     use shieldd_sdk_asset::Value;
     use shieldd_sdk_num::Amount;
-
-    fn derive_ack(
-        ring_pk: &decaf377::Element,
-        address: &shieldd_sdk_keys::Address,
-    ) -> decaf377::Element {
-        let d = derive_compliance_scalar(address);
-        let d_fr = decaf377::Fr::from_le_bytes_mod_order(&d.to_bytes());
-        *ring_pk * d_fr
-    }
 
     fn make_extracted(raw_bytes: Vec<u8>, asset_id: asset::Id) -> ExtractedComplianceCiphertext {
         use shieldd_sdk_txhash::TransactionId;
@@ -157,7 +147,6 @@ mod tests {
 
     fn make_ciphertext(
         dk_pub: &decaf377::Element,
-        ring_pk: &decaf377::Element,
         sender_address: &shieldd_sdk_keys::Address,
         receiver_address: &shieldd_sdk_keys::Address,
         asset_id: asset::Id,
@@ -167,9 +156,9 @@ mod tests {
     ) -> TransferComplianceCiphertext {
         encrypt_transfer(
             &mut OsRng,
-            ring_pk,
-            &derive_ack(ring_pk, sender_address),
-            &derive_ack(ring_pk, receiver_address),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
             dk_pub,
             receiver_address,
             sender_address,
@@ -187,14 +176,12 @@ mod tests {
     fn screener_detects_matching_asset() {
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
-        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::rand(&mut OsRng);
         let sender_address = make_address(11);
         let receiver_address = make_address(21);
         let asset_id = asset::Id(decaf377::Fq::from(9999u64));
 
         let ciphertext = make_ciphertext(
             &dk_pub,
-            &ring_pk,
             &sender_address,
             &receiver_address,
             asset_id,
@@ -217,14 +204,12 @@ mod tests {
     fn screener_ignores_wrong_asset_or_key() {
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
-        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::rand(&mut OsRng);
         let sender_address = make_address(12);
         let receiver_address = make_address(22);
         let asset_id = asset::Id(decaf377::Fq::from(1111u64));
         let other_asset = asset::Id(decaf377::Fq::from(2222u64));
         let ciphertext = make_ciphertext(
             &dk_pub,
-            &ring_pk,
             &sender_address,
             &receiver_address,
             asset_id,

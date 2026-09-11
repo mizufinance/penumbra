@@ -1,8 +1,7 @@
 # Voluntary transaction disclosure
 
 Disclosure is an off-chain wallet operation. It never reserves notes or modifies
-payment proofs, commitments, consensus, or spendable balances. Compliance audit
-pulls through ACP/Orbis are a separate, deferred mode.
+payment proofs, commitments, consensus, or spendable balances. Compliance collection through ACP/Orbis uses a separate encrypted-evidence path.
 
 | Evidence | What the recipient obtains |
 | --- | --- |
@@ -77,15 +76,22 @@ existing files are never overwritten. Import stores the original verified receip
 without adding spendable notes.
 
 `audit-ciphertext` resolves a canonical compliance tier from committed node data
-without opening a wallet. Its selection contains `version: 1`, `chain_id`, an
+without opening a wallet. Its selection contains `version: 2`, `chain_id`, an
 ordinary Transfer `reference`, and `access`. General access is
 `{"mode":"general","value":"amount"}`, with `sender` and `receiver` as the other
 values. Named-person access is `{"mode":"named_person","tier":"sender_core",
 "address":"..."}`; tiers are `sender_core`, `sender_ext`, `output_core`, and
 `output_ext`. The reference uses receiver output index zero. The result contains
 the accepted ciphertext, metadata, selected ephemeral key, wrapping, and canonical
-address derivation when applicable. It is not a portable inclusion proof or an
-authorization to perform PRE.
+LaKey identity (chain, ring, epoch, person/general scope, field). It is not a portable inclusion proof or an
+authorization to perform PRE. `--transactions` optionally supplies indexed bytes;
+they must match the canonical accepted transaction exactly. Missing Shinzo data
+can fall back to the chosen node.
+
+`audit-registration` reconstructs certificate statements from signed registration
+grants and chosen-node policy. `audit-decode` takes a selected shared point only
+after independent Orbis verification; it does not itself authenticate PRE.
+Auditor decryption remains local.
 
 ## Spending-authority control
 

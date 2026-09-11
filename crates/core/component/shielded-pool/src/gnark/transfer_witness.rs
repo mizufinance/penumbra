@@ -1,3 +1,4 @@
+use crate::gnark::typed::AuditKeysBinary;
 use anyhow::{anyhow, Context, Result};
 use decaf377::{Encoding, Fq};
 
@@ -57,6 +58,7 @@ pub struct TransferReceiverOutputWitness {
     pub recipient_rnk_dh_pk_affine: PointAffineBytes,
     pub recipient_rnk_commitment: [u8; 32],
     pub recipient_status: [u8; 32],
+    pub recipient_audit_keys: AuditKeysBinary,
     pub recipient_diversified_generator_affine: PointAffineBytes,
     pub recipient_transmission_key_affine: PointAffineBytes,
 }
@@ -128,6 +130,7 @@ pub struct TransferWitness {
     pub sender_rnk_dh_pk_affine: PointAffineBytes,
     pub sender_rnk_commitment: [u8; 32],
     pub sender_status: [u8; 32],
+    pub sender_audit_keys: AuditKeysBinary,
     pub transfer_nonce_root: [u8; 32],
     pub detection_ciphertext: Vec<[u8; 32]>,
     pub sender_core_key_confirmation: [u8; 32],
@@ -138,6 +141,7 @@ pub struct TransferWitness {
     pub resource_hash: [u8; 32],
     pub permission_hash: [u8; 32],
     pub metadata_target_timestamp: [u8; 32],
+    pub audit_epoch: [u8; 32],
     pub sender_core_salt: [u8; 32],
     pub sender_ext_salt: [u8; 32],
     pub output_core_salt: [u8; 32],
@@ -312,6 +316,9 @@ impl TransferWitness {
             recipient_rnk_dh_pk_affine,
             recipient_rnk_commitment,
             recipient_status: receiver_status,
+            recipient_audit_keys: AuditKeysBinary::from_keys(
+                &receiver_private.recipient_leaf.audit_keys,
+            )?,
             recipient_diversified_generator_affine: point_affine_bytes(
                 *receiver_private
                     .recipient_leaf
@@ -415,6 +422,7 @@ impl TransferWitness {
             sender_rnk_dh_pk_affine,
             sender_rnk_commitment,
             sender_status,
+            sender_audit_keys: AuditKeysBinary::from_keys(&private.sender_leaf.audit_keys)?,
             transfer_nonce_root: private.compliance.transfer_nonce_root.to_bytes(),
             detection_ciphertext: public
                 .compliance
@@ -429,6 +437,7 @@ impl TransferWitness {
             policy_id_hash: public.compliance.metadata.policy_id_hash_bytes,
             resource_hash: public.compliance.metadata.resource_hash_bytes,
             permission_hash: public.compliance.metadata.permission_hash_bytes,
+            audit_epoch: Fq::from(public.compliance.metadata.audit_epoch).to_bytes(),
             metadata_target_timestamp: Fq::from(public.compliance.metadata.target_timestamp)
                 .to_bytes(),
             sender_core_salt: public.compliance.metadata.sender_core_salt_bytes,

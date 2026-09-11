@@ -58,6 +58,8 @@ enum Operation {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RingInput {
+    audit_keys_hex: String,
+    audit_certificate_hex: Option<String>,
     ring_pk_hex: String,
     ring_id: String,
     policy_id: String,
@@ -68,6 +70,7 @@ struct RingInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UserRegistrationInput {
+    audit_keys_hex: String,
     address: Address,
     rnk_dh_pk_hex: String,
     rnk_commitment_hex: String,
@@ -392,7 +395,18 @@ fn register_asset_action(ring: RingInput) -> Result<Vec<ActionPlan>> {
         .parse_denom("ubrl")
         .expect("ubrl is a base denomination")
         .id();
+    let audit_keys =
+        shieldd_sdk_compliance::AuditKeys::from_bytes(&hex::decode(&ring.audit_keys_hex)?)?;
+    let audit_certificate = OrbisCapabilityCertificate::decode(
+        hex::decode(
+            ring.audit_certificate_hex
+                .as_ref()
+                .context("asset registration requires an Orbis general audit certificate")?,
+        )?
+        .as_slice(),
+    )?;
     let body = AssetRegistrationGrantBody {
+        audit_keys: Some(audit_keys),
         asset_id,
         is_regulated: true,
         dk_pub: Some(DetectionKey::new(Fr::from(3u64)).public_key()),
@@ -414,6 +428,8 @@ fn register_asset_action(ring: RingInput) -> Result<Vec<ActionPlan>> {
         body: body.clone(),
     };
     Ok(vec![ActionPlan::from(MsgRegisterAsset {
+        audit_certificate: Some(audit_certificate),
+        audit_keys: body.audit_keys,
         asset_id: body.asset_id,
         is_regulated: body.is_regulated,
         dk_pub: body.dk_pub,
@@ -451,6 +467,7 @@ fn register_user_action(
         ring_pk,
         rnk_dh_pk,
         rnk_commitment,
+        shieldd_sdk_compliance::AuditKeys::from_bytes(&hex::decode(&registration.audit_keys_hex)?)?,
     )?;
     let capability_certificate = OrbisCapabilityCertificate::decode(
         hex::decode(&registration.capability_certificate_hex)
@@ -467,6 +484,7 @@ fn register_user_action(
         ring.policy_id.clone(),
         ring.permission.clone(),
         ring.resource.clone(),
+        shieldd_sdk_compliance::AuditKeys::from_bytes(&hex::decode(&ring.audit_keys_hex)?)?,
     );
     capability_certificate.verify(&leaf, &policy, chain_id)?;
     let body = UserRegistrationGrantBody {

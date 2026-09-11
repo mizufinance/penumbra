@@ -15,13 +15,14 @@ pub struct TransferComplianceMetadata {
     pub resource_hash_bytes: [u8; 32],
     pub permission_hash_bytes: [u8; 32],
     pub target_timestamp: u64,
+    pub audit_epoch: u64,
     pub sender_core_salt_bytes: [u8; 32],
     pub sender_ext_salt_bytes: [u8; 32],
     pub output_core_salt_bytes: [u8; 32],
     pub output_ext_salt_bytes: [u8; 32],
 }
 
-pub const TRANSFER_COMPLIANCE_METADATA_BYTES: usize = 8 * 32 + 8;
+pub const TRANSFER_COMPLIANCE_METADATA_BYTES: usize = 8 * 32 + 16;
 
 impl TransferComplianceMetadata {
     #[allow(clippy::too_many_arguments)]
@@ -31,6 +32,7 @@ impl TransferComplianceMetadata {
         resource_hash: Fq,
         permission_hash: Fq,
         target_timestamp: u64,
+        audit_epoch: u64,
         sender_core_salt: Fq,
         sender_ext_salt: Fq,
         output_core_salt: Fq,
@@ -42,6 +44,7 @@ impl TransferComplianceMetadata {
             resource_hash_bytes: resource_hash.to_bytes(),
             permission_hash_bytes: permission_hash.to_bytes(),
             target_timestamp,
+            audit_epoch,
             sender_core_salt_bytes: sender_core_salt.to_bytes(),
             sender_ext_salt_bytes: sender_ext_salt.to_bytes(),
             output_core_salt_bytes: output_core_salt.to_bytes(),
@@ -56,6 +59,7 @@ impl TransferComplianceMetadata {
         resource: &str,
         permission: &str,
         target_timestamp: u64,
+        audit_epoch: u64,
         sender_core_salt: Fq,
         sender_ext_salt: Fq,
         output_core_salt: Fq,
@@ -67,6 +71,7 @@ impl TransferComplianceMetadata {
             string_to_fq(resource),
             string_to_fq(permission),
             target_timestamp,
+            audit_epoch,
             sender_core_salt,
             sender_ext_salt,
             output_core_salt,
@@ -97,6 +102,7 @@ impl TransferComplianceMetadata {
         out.extend_from_slice(&self.resource_hash_bytes);
         out.extend_from_slice(&self.permission_hash_bytes);
         out.extend_from_slice(&self.target_timestamp.to_le_bytes());
+        out.extend_from_slice(&self.audit_epoch.to_le_bytes());
         for salt in self.salts() {
             out.extend_from_slice(salt);
         }
@@ -117,6 +123,7 @@ impl TransferComplianceMetadata {
             resource_hash_bytes: reader.read_array::<32>()?,
             permission_hash_bytes: reader.read_array::<32>()?,
             target_timestamp: reader.read_u64()?,
+            audit_epoch: reader.read_u64()?,
             sender_core_salt_bytes: reader.read_array::<32>()?,
             sender_ext_salt_bytes: reader.read_array::<32>()?,
             output_core_salt_bytes: reader.read_array::<32>()?,
@@ -222,6 +229,7 @@ mod tests {
             "document",
             "read",
             1_700_000_000,
+            1,
             Fq::from(11u64),
             Fq::from(12u64),
             Fq::from(13u64),
@@ -267,6 +275,7 @@ mod tests {
         expected.extend_from_slice(&metadata.resource_hash_bytes);
         expected.extend_from_slice(&metadata.permission_hash_bytes);
         expected.extend_from_slice(&metadata.target_timestamp.to_le_bytes());
+        expected.extend_from_slice(&metadata.audit_epoch.to_le_bytes());
         expected.extend_from_slice(&metadata.sender_core_salt_bytes);
         expected.extend_from_slice(&metadata.sender_ext_salt_bytes);
         expected.extend_from_slice(&metadata.output_core_salt_bytes);

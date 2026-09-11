@@ -160,21 +160,11 @@ pub fn decrypt_flagged_withdrawal_sender(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::derive_compliance_scalar;
     use crate::issuer_keys::DetectionKey;
     use crate::test_helpers::make_address;
     use crate::transfer::encrypt_transfer;
     use rand_core::OsRng;
     use shieldd_sdk_asset::Value;
-
-    fn derive_ack(
-        ring_pk: &decaf377::Element,
-        address: &shieldd_sdk_keys::Address,
-    ) -> decaf377::Element {
-        let d = derive_compliance_scalar(address);
-        let d_fr = decaf377::Fr::from_le_bytes_mod_order(&d.to_bytes());
-        *ring_pk * d_fr
-    }
 
     fn metadata(sender_core_salt: Fq, output_core_salt: Fq) -> TransferComplianceMetadata {
         TransferComplianceMetadata::from_identifiers(
@@ -182,6 +172,7 @@ mod tests {
             "policy",
             "resource",
             "permission",
+            1,
             1,
             sender_core_salt,
             Fq::from(12u64),
@@ -194,7 +185,6 @@ mod tests {
     fn test_decrypt_full_flagged_transfer() {
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
-        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::rand(&mut OsRng);
         let sender_address = make_address(31);
         let receiver_address = make_address(32);
         let asset_id = asset::Id(decaf377::Fq::from(4242u64));
@@ -204,9 +194,9 @@ mod tests {
         let output_core_salt = decaf377::Fq::from(2u64);
         let ciphertext = encrypt_transfer(
             &mut OsRng,
-            &ring_pk,
-            &derive_ack(&ring_pk, &sender_address),
-            &derive_ack(&ring_pk, &receiver_address),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
             &dk_pub,
             &receiver_address,
             &sender_address,
@@ -244,7 +234,6 @@ mod tests {
     fn test_decrypt_full_flagged_rejects_unflagged_transfer() {
         let dk = DetectionKey::demo();
         let dk_pub = dk.public_key();
-        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::rand(&mut OsRng);
         let sender_address = make_address(41);
         let receiver_address = make_address(42);
         let asset_id = asset::Id(decaf377::Fq::from(999u64));
@@ -253,9 +242,9 @@ mod tests {
         let output_core_salt = decaf377::Fq::from(3u64);
         let ciphertext = encrypt_transfer(
             &mut OsRng,
-            &ring_pk,
-            &derive_ack(&ring_pk, &sender_address),
-            &derive_ack(&ring_pk, &receiver_address),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
             &dk_pub,
             &receiver_address,
             &sender_address,

@@ -14,6 +14,7 @@ import (
 const ComplianceQuadTreeDepth = 16
 
 type IndexedLeafInputs struct {
+	AuditKeys        AuditKeysInputs
 	Value            frontend.Variable
 	NextIndex        frontend.Variable
 	NextValue        frontend.Variable
@@ -36,29 +37,6 @@ func fqFromBase64String(value string) (*big.Int, error) {
 		return nil, fmt.Errorf("expected 32 fq bytes, got %d", len(decoded))
 	}
 	return primitives.LittleEndianBytesToBigInt(decoded), nil
-}
-
-func IndexedLeafInputsFromFixture(fixture primitives.SpendFixture) (IndexedLeafInputs, error) {
-	leaf := fixture.Private.AssetIndexedLeaf
-	return IndexedLeafInputs{
-		Value:     primitives.LittleEndianBytesToBigInt(leaf.Value),
-		NextIndex: leaf.NextIndex,
-		NextValue: primitives.LittleEndianBytesToBigInt(leaf.NextValue),
-		DKPub: gnarkte.Point{
-			X: primitives.MustBigInt(fixture.Private.AssetIndexedLeafDKPubAffine.X),
-			Y: primitives.MustBigInt(fixture.Private.AssetIndexedLeafDKPubAffine.Y),
-		},
-		DailyVolumeLimit: leaf.DailyVolumeLimit.String(),
-		RoutePolicyHash:  primitives.LittleEndianBytesToBigInt(leaf.RoutePolicyHash),
-		RingPK: gnarkte.Point{
-			X: primitives.MustBigInt(fixture.Private.AssetIndexedLeafRingPKAffine.X),
-			Y: primitives.MustBigInt(fixture.Private.AssetIndexedLeafRingPKAffine.Y),
-		},
-		RingIDHash:     primitives.LittleEndianBytesToBigInt(leaf.RingIDHash),
-		PolicyIDHash:   primitives.LittleEndianBytesToBigInt(leaf.PolicyIDHash),
-		PermissionHash: primitives.LittleEndianBytesToBigInt(leaf.PermissionHash),
-		ResourceHash:   primitives.LittleEndianBytesToBigInt(leaf.ResourceHash),
-	}, nil
 }
 
 func QuadPathFromFixture(path primitives.MerklePathFixture) ([ComplianceQuadTreeDepth][3]*big.Int, error) {
@@ -126,6 +104,14 @@ func IndexedLeafCommitmentNative(inputs IndexedLeafInputs) (*big.Int, error) {
 		return nil, err
 	}
 
+	auditHash, err := AuditKeysCommitmentNative(inputs.AuditKeys)
+	if err != nil {
+		return nil, err
+	}
+	ringHash, err = primitives.Poseidon377Hash2Native(primitives.MustBigInt(vectors.Poseidon377.IMTRingDomain), [2]*big.Int{ringHash, auditHash})
+	if err != nil {
+		return nil, err
+	}
 	return primitives.Poseidon377Hash5Native(
 		primitives.MustBigInt(vectors.Poseidon377.IMTLeafDomain),
 		[5]*big.Int{
@@ -176,6 +162,14 @@ func IndexedLeafCommitment(api frontend.API, inputs IndexedLeafInputs) (frontend
 		return nil, err
 	}
 
+	auditHash, err := AuditKeysCommitment(api, inputs.AuditKeys)
+	if err != nil {
+		return nil, err
+	}
+	ringHash, err = primitives.Poseidon377Hash2(api, primitives.MustBigInt(vectors.Poseidon377.IMTRingDomain), [2]frontend.Variable{ringHash, auditHash})
+	if err != nil {
+		return nil, err
+	}
 	return primitives.Poseidon377Hash5(
 		api,
 		primitives.MustBigInt(vectors.Poseidon377.IMTLeafDomain),

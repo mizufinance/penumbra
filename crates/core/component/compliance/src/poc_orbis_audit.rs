@@ -478,6 +478,7 @@ mod tests {
             "document",
             "read",
             1_700_000_000,
+            1,
             Fq::from(11u64),
             Fq::from(12u64),
             Fq::from(13u64),

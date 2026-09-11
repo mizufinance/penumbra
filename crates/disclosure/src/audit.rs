@@ -22,19 +22,71 @@ impl AuditAccess {
         }
     }
 
-    pub fn derivation(&self) -> Result<Option<Vec<u8>>> {
+    pub fn key_scope(&self) -> Result<AuditKeyScope> {
         match self {
-            Self::General { .. } => Ok(None),
+            Self::General { .. } => Ok(AuditKeyScope::General),
             Self::NamedPerson { address, .. } => {
                 let address: shieldd_sdk_keys::Address = address
                     .parse()
                     .context("invalid named-person audit address")?;
-                Ok(Some(shieldd_sdk_compliance::compliance_derivation(
-                    &address,
-                )))
+                Ok(AuditKeyScope::Person {
+                    identity: address.to_vec(),
+                })
             }
         }
     }
+
+    pub fn key_field(&self) -> AuditKeyField {
+        match self {
+            Self::General {
+                value: MasterSelection::Amount,
+            } => AuditKeyField::Amount,
+            Self::General {
+                value: MasterSelection::Sender,
+            } => AuditKeyField::Sender,
+            Self::General {
+                value: MasterSelection::Receiver,
+            } => AuditKeyField::Receiver,
+            Self::NamedPerson {
+                tier: TransferTier::SenderCore | TransferTier::OutputCore,
+                ..
+            } => AuditKeyField::Amount,
+            Self::NamedPerson {
+                tier: TransferTier::SenderExt,
+                ..
+            } => AuditKeyField::Receiver,
+            Self::NamedPerson {
+                tier: TransferTier::OutputExt,
+                ..
+            } => AuditKeyField::Sender,
+        }
+    }
+}
+
+/// Public LaKey identity passed to Orbis; the PRF is evaluated only by its MPC nodes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuditKeyIdentity {
+    pub chain: String,
+    pub ring: String,
+    pub epoch: u64,
+    pub scope: AuditKeyScope,
+    pub field: AuditKeyField,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuditKeyScope {
+    General,
+    Person { identity: Vec<u8> },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditKeyField {
+    Amount,
+    Sender,
+    Receiver,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,8 +116,36 @@ pub struct AcceptedAuditCiphertext {
     pub metadata: TransferComplianceMetadata,
     pub epk: [u8; 32],
     pub wrapping: [u8; 32],
-    pub derivation: Option<Vec<u8>>,
+    pub identity: AuditKeyIdentity,
     pub object_id: String,
+}
+
+/// Indexed bytes must exactly match a canonical transaction accepted by the chosen node.
+pub fn verify_audit_candidate(
+    selection: &AuditSelection,
+    block: &AcceptedBlock,
+    raw: &[u8],
+) -> Result<()> {
+    use shieldd_sdk_proto::DomainType;
+    let candidate = shieldd_sdk_transaction::Transaction::decode_canonical(raw)?;
+    ensure!(
+        candidate.id().to_string() == selection.reference.transaction_id,
+        "indexed transaction ID mismatch"
+    );
+    ensure!(
+        block.height == selection.reference.height,
+        "indexed transaction height mismatch"
+    );
+    let accepted = block
+        .transactions
+        .iter()
+        .find(|tx| tx.id() == candidate.id())
+        .context("indexed transaction not accepted")?;
+    ensure!(
+        accepted.encode_to_vec() == raw,
+        "indexed transaction bytes differ from accepted transaction"
+    );
+    Ok(())
 }
 
 /// Node access remains outside this function; caller supplies its chosen node's data.
@@ -75,7 +155,7 @@ pub fn accepted_audit_ciphertext(
     block: &AcceptedBlock,
 ) -> Result<AcceptedAuditCiphertext> {
     ensure!(
-        selection.version == 1,
+        selection.version == 2,
         "unsupported audit selection version"
     );
     ensure!(
@@ -137,7 +217,17 @@ pub fn accepted_audit_ciphertext(
             "audit policy does not match accepted transaction"
         );
     }
-    let derivation = selection.access.derivation()?;
+    ensure!(
+        metadata.audit_epoch != 0,
+        "unregulated transaction has no Orbis audit keys"
+    );
+    let identity = AuditKeyIdentity {
+        chain: selection.chain_id.clone(),
+        ring: policy.ring_id.clone(),
+        epoch: metadata.audit_epoch,
+        scope: selection.access.key_scope()?,
+        field: selection.access.key_field(),
+    };
     let tier = selection.access.tier().select(&ct, &metadata)?;
     let epk = tier.epk.vartime_compress().0;
     let wrapping = match &selection.access {
@@ -156,7 +246,10 @@ pub fn accepted_audit_ciphertext(
             };
             format!(
                 "named:{tier}:{}",
-                hex::encode(derivation.as_ref().expect("named derivation"))
+                match &identity.scope {
+                    AuditKeyScope::Person { identity } => hex::encode(identity),
+                    AuditKeyScope::General => unreachable!("named access has person scope"),
+                }
             )
         }
     };
@@ -171,8 +264,47 @@ pub fn accepted_audit_ciphertext(
         metadata,
         epk,
         wrapping,
-        derivation,
+        identity,
         object_id,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DecodedAuditValue {
+    Amount {
+        base_units: String,
+    },
+    AddressComponents {
+        diversified_generator: [u8; 32],
+        transmission_key: [u8; 32],
+    },
+}
+
+/// Decodes using an already verified PRE shared point; decoding does not verify PRE evidence.
+pub fn decode_audit_ciphertext(
+    accepted: &AcceptedAuditCiphertext,
+    shared_point: [u8; 32],
+) -> Result<DecodedAuditValue> {
+    use shieldd_sdk_compliance::transfer_audit::TransferAuditData;
+    let shared = decaf377::Encoding(shared_point)
+        .vartime_decompress()
+        .map_err(|_| anyhow::anyhow!("invalid audit shared point"))?;
+    let ct = TransferComplianceCiphertext::from_bytes(&accepted.ciphertext)?;
+    let value = match &accepted.selection.access {
+        AuditAccess::General { value } => value.decrypt(&ct, &accepted.metadata, &shared)?,
+        AuditAccess::NamedPerson { tier, .. } => {
+            tier.select(&ct, &accepted.metadata)?.decrypt(&shared)?
+        }
+    };
+    Ok(match value {
+        TransferAuditData::Amount(amount) => DecodedAuditValue::Amount {
+            base_units: amount.to_string(),
+        },
+        TransferAuditData::Counterparty(address) => DecodedAuditValue::AddressComponents {
+            diversified_generator: address.diversified_generator.vartime_compress().0,
+            transmission_key: address.transmission_key,
+        },
     })
 }
 
@@ -183,7 +315,7 @@ mod tests {
     #[test]
     fn rejects_wrong_chain_height_version_and_missing_acceptance() {
         let selection = AuditSelection {
-            version: 1,
+            version: 2,
             chain_id: "chain".to_owned(),
             reference: OutputRef {
                 transaction_id: "00".repeat(32),
@@ -212,7 +344,7 @@ mod tests {
                 .contains("chain mismatch")
         );
         let mut changed = selection.clone();
-        changed.version = 2;
+        changed.version = 1;
         assert!(accepted_audit_ciphertext(changed, "chain", &block)
             .unwrap_err()
             .to_string()
@@ -227,5 +359,46 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not accepted"));
+    }
+
+    #[test]
+    fn indexed_bytes_require_exact_canonical_accepted_transaction() {
+        let tx = shieldd_sdk_transaction::Transaction::default();
+        let raw: Vec<u8> = (&tx).into();
+        let mut selection = AuditSelection {
+            version: 2,
+            chain_id: "chain".into(),
+            reference: OutputRef {
+                transaction_id: tx.id().to_string(),
+                height: 7,
+                action: ActionRef::Body(0),
+                output: 0,
+            },
+            access: AuditAccess::General {
+                value: MasterSelection::Amount,
+            },
+            policy: AuditPolicy {
+                ring_id: "ring".into(),
+                policy_id: "policy".into(),
+                resource: "transaction".into(),
+                permission: "read".into(),
+            },
+        };
+        let mut block = AcceptedBlock {
+            height: 7,
+            transactions: vec![tx],
+        };
+        verify_audit_candidate(&selection, &block, &raw).unwrap();
+        let mut altered = raw.clone();
+        altered.extend_from_slice(&[0xf8, 0x07, 0x00]);
+        assert!(verify_audit_candidate(&selection, &block, &altered).is_err());
+        selection.reference.transaction_id = "00".repeat(32);
+        assert!(verify_audit_candidate(&selection, &block, &raw).is_err());
+        selection.reference.transaction_id = block.transactions[0].id().to_string();
+        block.height += 1;
+        assert!(verify_audit_candidate(&selection, &block, &raw).is_err());
+        block.height -= 1;
+        block.transactions.clear();
+        assert!(verify_audit_candidate(&selection, &block, &raw).is_err());
     }
 }

@@ -2530,6 +2530,7 @@ impl Storage {
                 &update.leaf.capk.vartime_compress().0,
                 &update.leaf.rnk_dh_pk.vartime_compress().0,
                 &update.leaf.rnk_commitment.to_bytes(),
+                &update.leaf.audit_keys,
                 update.leaf.status,
                 update.leaf.freeze_generation,
                 update.leaf.frozen_since_height,

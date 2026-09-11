@@ -1,4 +1,5 @@
 pub mod enrichment;
+pub mod registration;
 pub use enrichment::{AssetProofData, BatchComplianceData, ComplianceQuery, UserProofData};
 
 pub mod event;
@@ -423,6 +424,7 @@ mod tests {
             ring_pk,
             sender_address.diversified_generator() * decaf377::Fr::from(999u64),
             Fq::from(1u64),
+            AuditKeys::test_keys(),
         )
         .unwrap();
         let receiver_leaf = ComplianceLeaf::registered_from_rnk(
@@ -431,6 +433,7 @@ mod tests {
             ring_pk,
             receiver_address.diversified_generator() * decaf377::Fr::from(999u64),
             Fq::from(2u64),
+            AuditKeys::test_keys(),
         )
         .unwrap();
 
@@ -456,14 +459,12 @@ mod tests {
 
         let sender_auth_path = state.get_user_auth_path(sender_position).await.unwrap();
         let receiver_auth_path = state.get_user_auth_path(receiver_position).await.unwrap();
-        let sender_ack = sender_leaf.capk;
-        let receiver_ack = receiver_leaf.capk;
 
         let ciphertext = encrypt_transfer(
             &mut OsRng,
-            &ring_pk,
-            &sender_ack,
-            &receiver_ack,
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
             &issuer_dk_pub,
             &receiver_address,
             &sender_address,
@@ -517,26 +518,16 @@ mod tests {
 
         let issuer_dk = DetectionKey::demo();
         let issuer_dk_pub = issuer_dk.public_key();
-        let ring_pk = decaf377::Element::GENERATOR * decaf377::Fr::rand(&mut OsRng);
         let sender_address = test_helpers::make_address(1);
         let receiver_address = test_helpers::make_address(2);
         let asset_id = asset::Id(decaf377::Fq::from(999999u64));
         let amount = Amount::from(1_000_000u128);
 
-        let sender_ack = ring_pk
-            * decaf377::Fr::from_le_bytes_mod_order(
-                &derive_compliance_scalar(&sender_address).to_bytes(),
-            );
-        let receiver_ack = ring_pk
-            * decaf377::Fr::from_le_bytes_mod_order(
-                &derive_compliance_scalar(&receiver_address).to_bytes(),
-            );
-
         let ciphertext = encrypt_transfer(
             &mut OsRng,
-            &ring_pk,
-            &sender_ack,
-            &receiver_ack,
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
             &issuer_dk_pub,
             &receiver_address,
             &sender_address,
@@ -553,6 +544,7 @@ mod tests {
             "policy",
             "resource",
             "permission",
+            1,
             1,
             Fq::from(8u64),
             Fq::from(10u64),
@@ -639,3 +631,6 @@ mod tests {
         );
     }
 }
+
+pub mod audit_keys;
+pub use audit_keys::AuditKeys;

@@ -1,3 +1,4 @@
+use crate::gnark::typed::AuditKeysBinary;
 use anyhow::{bail, Context, Result};
 
 use crate::gnark::{
@@ -10,7 +11,7 @@ use crate::gnark::{
     typed::{decode_indexed_leaf, encode_indexed_leaf, encode_merkle_path, encode_point_affine},
 };
 
-const NOTE_RESHAPE_WITNESS_MAGIC: &[u8; 4] = b"PNWG";
+const NOTE_RESHAPE_WITNESS_MAGIC: &[u8; 4] = b"PNW2";
 
 impl NoteReshapeWitness {
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -45,6 +46,7 @@ impl NoteReshapeWitness {
         encode_point_affine(&mut buf, &self.sender_rnk_dh_pk_affine);
         put_bytes(&mut buf, &self.sender_rnk_commitment);
         put_bytes(&mut buf, &self.sender_status);
+        self.sender_audit_keys.encode(&mut buf);
         put_bytes(&mut buf, &self.shared.asset_id);
         encode_point_affine(&mut buf, &self.shared.diversified_generator_affine);
         for spend in &self.spends {
@@ -108,6 +110,7 @@ impl NoteReshapeWitness {
         let sender_rnk_dh_pk_affine = cursor.read_point_affine()?;
         let sender_rnk_commitment = cursor.read_fixed::<32>()?;
         let sender_status = cursor.read_fixed::<32>()?;
+        let sender_audit_keys = AuditKeysBinary::decode(&mut cursor)?;
         let shared = NoteReshapeSharedNoteContextWitness {
             asset_id: cursor.read_fixed::<32>()?,
             diversified_generator_affine: cursor.read_point_affine()?,
@@ -168,6 +171,7 @@ impl NoteReshapeWitness {
             sender_rnk_dh_pk_affine,
             sender_rnk_commitment,
             sender_status,
+            sender_audit_keys,
             shared,
             spends,
             outputs,

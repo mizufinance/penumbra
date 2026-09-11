@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	noteReshapeWitnessMagic = "PNWG"
+	noteReshapeWitnessMagic = "PNW2"
 	maxNoteReshapeItems     = 8
 )
 
@@ -70,6 +70,7 @@ type NoteReshapeWitnessBinary struct {
 	SenderRnkDhPkAffine      PointAffineBinary
 	SenderRnkCommitment      [32]byte
 	SenderStatus             [32]byte
+	SenderAuditKeys          AuditKeysBinary
 	Shared                   NoteReshapeSharedNoteContextWitnessBinary
 	Spends                   []NoteReshapeSpendWitnessBinary
 	Outputs                  []NoteReshapeOutputWitnessBinary
@@ -195,6 +196,9 @@ func decodeNoteReshapeWitness(payload []byte) (*NoteReshapeWitnessBinary, error)
 		return nil, err
 	}
 	if witness.SenderStatus, err = read32(reader); err != nil {
+		return nil, err
+	}
+	if witness.SenderAuditKeys, err = readAuditKeys(reader); err != nil {
 		return nil, err
 	}
 	if witness.Shared.AssetID, err = read32(reader); err != nil {

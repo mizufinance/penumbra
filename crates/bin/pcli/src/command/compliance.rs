@@ -34,6 +34,9 @@ pub enum ComplianceCmd {
         /// Orbis ring public key (hex, 64 chars = 32 bytes compressed).
         #[clap(long)]
         ring_pk_hex: Option<String>,
+        /// Registered general audit key bundle, hex encoded.
+        #[clap(long)]
+        audit_keys_hex: Option<String>,
         /// Orbis ring identifier.
         #[clap(long, default_value = "")]
         ring_id: String,
@@ -82,6 +85,9 @@ pub enum ComplianceCmd {
         /// Orbis ring public key for the registered asset.
         #[clap(long)]
         ring_pk_hex: String,
+        /// Registered person audit key bundle, hex encoded.
+        #[clap(long)]
+        audit_keys_hex: String,
         /// Orbis ring public key evaluated on the address diversified generator.
         #[clap(long)]
         rnk_dh_pk_hex: String,
@@ -147,6 +153,7 @@ impl ComplianceCmd {
                 dk_pub_hex,
                 daily_volume_limit,
                 ring_pk_hex,
+                audit_keys_hex,
                 ring_id,
                 policy_id,
                 permission,
@@ -212,6 +219,12 @@ impl ComplianceCmd {
                 let body = AssetRegistrationGrantBody {
                     asset_id,
                     is_regulated,
+                    audit_keys: audit_keys_hex
+                        .as_ref()
+                        .map(|encoded| {
+                            shieldd_sdk_compliance::AuditKeys::from_bytes(&hex::decode(encoded)?)
+                        })
+                        .transpose()?,
                     dk_pub,
                     daily_volume_limit: *daily_volume_limit,
                     allowed_ibc_routes,
@@ -238,6 +251,7 @@ impl ComplianceCmd {
                 address,
                 policy_id,
                 ring_pk_hex,
+                audit_keys_hex,
                 rnk_dh_pk_hex,
                 rnk_commitment_hex,
                 registration_authority_sk_hex,
@@ -253,6 +267,7 @@ impl ComplianceCmd {
                     ring_pk,
                     rnk_dh_pk,
                     rnk_commitment,
+                    shieldd_sdk_compliance::AuditKeys::from_bytes(&hex::decode(audit_keys_hex)?)?,
                 )?;
                 let mut nonce = vec![0u8; 16];
                 rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut nonce);

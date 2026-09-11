@@ -12,10 +12,9 @@ General audits select amount (output CORE), sender (output EXT), or receiver
 (sender EXT). Each master wrapping reuses that payload's encryption key and EPK.
 Its mask is Poseidon377 hash_3 under `shieldd.transfer.master_wrapping.v1`, with
 inputs `(position, Compress(shared), Compress(EPK))`; positions are 0, 1, and 2.
-The shared point uses the registered ring key for ordinary transactions and the
-issuer DK for flagged transactions. All three fields are always present and
-constrained by the Transfer proof. Named-person audits use the existing child
-wrappings. Address results are components, not full canonical address strings.
+The shared point uses the registered general-scope LaKey key for that field in
+ordinary transactions and the issuer DK for flagged transactions. All three fields are always present and
+constrained by the Transfer proof. Named-person audits use independently registered person/field LaKey keys. Address results are components, not full canonical address strings.
 
 ```text
 TransferComplianceCiphertext: 800 bytes
@@ -30,16 +29,17 @@ TransferComplianceCiphertext: 800 bytes
   672..704  output_core ciphertext: one Fq
   704..800  output_ext ciphertext: three Fq
 
-TransferComplianceMetadata: 264 bytes
+TransferComplianceMetadata: 272 bytes
   0..32     ring_id_hash Fq
   32..64    policy_id_hash Fq
   64..96    resource_hash Fq
   96..128   permission_hash Fq
   128..136  target_timestamp u64 little-endian
-  136..168  sender_core_salt Fq
-  168..200  sender_ext_salt Fq
-  200..232  output_core_salt Fq
-  232..264  output_ext_salt Fq
+  136..144  audit_epoch u64 little-endian
+  144..176  sender_core_salt Fq
+  176..208  sender_ext_salt Fq
+  208..240  output_core_salt Fq
+  240..272  output_ext_salt Fq
 ```
 
 Every Fq and compressed point must decode canonically. Metadata timestamp zero

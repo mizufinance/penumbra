@@ -91,6 +91,7 @@ impl StoragePlanningIo {
                         address: Some(address.clone().into()),
                         asset_id: Some(asset_id.into()),
                         capk: stored.capk.to_vec(),
+                        audit_keys: stored.audit_keys.to_bytes().to_vec(),
                         rnk_dh_pk: stored.rnk_dh_pk.to_vec(),
                         rnk_commitment: stored.rnk_commitment.to_vec(),
                         status: pb::UserAssetStatus::from(stored.status) as i32,

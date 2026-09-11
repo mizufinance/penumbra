@@ -1,3 +1,4 @@
+use crate::registration::ensure_regulated_asset_id;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cnidarium::{StateRead, StateWrite};
@@ -20,14 +21,6 @@ use crate::{
     structs::{AssetPolicy, ComplianceLeaf, MerklePath, UserAssetStatus, UserAssetStatusAction},
     tree::{QuadTree, ZERO_HASHES},
 };
-
-fn ensure_regulated_asset_id(asset_id: asset::Id, is_regulated: bool) -> Result<()> {
-    anyhow::ensure!(
-        !is_regulated || asset_id != *shieldd_sdk_asset::BASE_ASSET_ID,
-        "the base fee asset cannot be registered as regulated"
-    );
-    Ok(())
-}
 
 fn root_from_auth_path(
     mut position: u64,
@@ -115,37 +108,12 @@ impl UserGrantAdmission {
         current_unix: u64,
         chain_id: &str,
     ) -> Result<Self> {
-        policy.validate_regulated()?;
-        let grant = action
-            .grant
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing user registration grant"))?;
-        anyhow::ensure!(
-            grant.body.leaf == action.leaf,
-            "user registration grant leaf does not match action leaf"
-        );
-        action.leaf.validate_registration(policy.ring.ring_pk)?;
+        crate::registration::validate_user_grant(action, policy, current_unix)?;
         action
             .capability_certificate
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("missing Orbis capability certificate"))?
             .verify(&action.leaf, policy, chain_id)?;
-        anyhow::ensure!(
-            action.leaf.status == UserAssetStatus::Active,
-            "user registrations must start active"
-        );
-        anyhow::ensure!(
-            grant.body.policy_id == policy.ring.policy_id,
-            "user registration grant policy_id does not match asset policy"
-        );
-        anyhow::ensure!(
-            current_unix <= grant.body.valid_until_unix,
-            "user registration grant expired"
-        );
-        let authority_vk = policy.registration_authority_vk.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("regulated asset policy missing registration authority")
-        })?;
-        grant.verify(authority_vk)?;
         Ok(Self {
             leaf: action.leaf.clone(),
         })
@@ -167,6 +135,10 @@ impl GenesisUserAdmission {
         registration
             .capability_certificate
             .verify(&registration.leaf, policy, chain_id)?;
+        anyhow::ensure!(
+            registration.leaf.audit_keys.epoch == policy.ring.audit_keys.epoch,
+            "genesis user audit key epoch does not match asset policy"
+        );
         anyhow::ensure!(
             registration.leaf.status == UserAssetStatus::Active,
             "genesis compliance users must start active"
@@ -190,89 +162,24 @@ impl AssetGrantAdmission {
         action: &crate::structs::MsgRegisterAsset,
         registrar_authorized: bool,
         current_unix: u64,
+        chain_id: &str,
     ) -> Result<Self> {
-        ensure_regulated_asset_id(action.asset_id, action.is_regulated)?;
-        action.validate_authorization_keys()?;
-        let grant = action
-            .asset_registration_grant
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing asset registration grant"))?;
-        anyhow::ensure!(
-            grant.body == action.registration_grant_body(grant.body.valid_until_unix),
-            "asset registration grant body does not match action"
-        );
-        grant.verify()?;
         anyhow::ensure!(
             registrar_authorized,
             "asset registration grant signed by unauthorized registrar"
         );
-        anyhow::ensure!(
-            current_unix <= grant.body.valid_until_unix,
-            "asset registration grant expired"
-        );
-
-        let policy = if action.is_regulated {
-            let dk_pub = action.dk_pub.ok_or_else(|| {
-                anyhow::anyhow!("regulated assets require a detection key (dk_pub)")
-            })?;
-            let registration_authority_vk = action.registration_authority_vk.ok_or_else(|| {
-                anyhow::anyhow!("regulated assets require registration_authority_vk")
-            })?;
-            let seizure_authority_vk = action
-                .seizure_authority_vk
-                .ok_or_else(|| anyhow::anyhow!("regulated assets require seizure_authority_vk"))?;
-            let daily_volume_limit = action.daily_volume_limit.unwrap_or(u128::MAX);
-            let ring_pk = action
-                .ring_pk
-                .ok_or_else(|| anyhow::anyhow!("regulated assets require ring_pk"))?;
-            AssetPolicy::new(
-                dk_pub,
-                daily_volume_limit,
-                action.allowed_ibc_routes.clone(),
-                action.ibc_origin.clone(),
-                action.ring_id.clone(),
-                ring_pk,
-                action.policy_id.clone(),
-                action.permission.clone(),
-                action.resource.clone(),
-            )
-            .with_registration_authority(registration_authority_vk)
-            .with_seizure_authority(seizure_authority_vk)
-        } else {
-            anyhow::ensure!(
-                action.dk_pub.is_none(),
-                "unregulated assets cannot set dk_pub"
-            );
-            anyhow::ensure!(
-                action.daily_volume_limit.is_none(),
-                "unregulated assets cannot set a compliance daily_volume_limit"
-            );
-            anyhow::ensure!(
-                action.allowed_ibc_routes.is_empty(),
-                "unregulated assets cannot set allowed IBC routes"
-            );
-            anyhow::ensure!(
-                action.ibc_origin.is_none(),
-                "unregulated assets cannot set IBC origin"
-            );
-            anyhow::ensure!(
-                action.ring_pk.is_none()
-                    && action.ring_id.is_empty()
-                    && action.policy_id.is_empty()
-                    && action.permission.is_empty()
-                    && action.resource.is_empty(),
-                "unregulated assets cannot set Orbis configuration"
-            );
-            anyhow::ensure!(
-                action.registration_authority_vk.is_none() && action.seizure_authority_vk.is_none(),
-                "unregulated assets cannot set compliance authorities"
-            );
-            AssetPolicy::default_unregulated()
-        };
+        let policy = crate::registration::policy_from_asset_grant(action, current_unix)?;
         if action.is_regulated {
-            policy.validate_regulated()?;
+            action
+                .audit_certificate
+                .as_ref()
+                .context("missing Orbis general audit certificate")?
+                .verify_general(action.asset_id, &policy, chain_id)?;
         } else {
-            policy.validate_crypto_keys()?;
+            anyhow::ensure!(
+                action.audit_certificate.is_none(),
+                "unregulated asset cannot carry an audit certificate"
+            );
         }
         Ok(Self {
             asset_id: action.asset_id,

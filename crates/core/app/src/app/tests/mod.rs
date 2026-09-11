@@ -531,6 +531,7 @@ async fn regulated_genesis_note_transfers_through_host_and_compact_block() -> Re
     let regulated_denom = "wregulated_usd";
     let regulated_asset_id = asset::REGISTRY.parse_unit(regulated_denom).id();
     let native_asset = NativeAssetRegistration {
+        audit_keys: Some(shieldd_sdk_compliance::AuditKeys::test_keys()),
         asset_id: regulated_asset_id,
         is_regulated: true,
         dk_pub: Some(decaf377::Element::GENERATOR.vartime_compress().0),
@@ -558,6 +559,7 @@ async fn regulated_genesis_note_transfers_through_host_and_compact_block() -> Re
             decaf377::Element::GENERATOR,
             rnk_dh_pk,
             rnk,
+            shieldd_sdk_compliance::AuditKeys::test_keys(),
         )
     };
     let genesis_leaf = make_leaf(test_keys::ADDRESS_0.deref().clone())?;

@@ -18,6 +18,21 @@ pub enum DisclosureCmd {
         selection: Utf8PathBuf,
         #[clap(long)]
         node: String,
+        /// Candidate canonical transaction bytes as a JSON array of base64 strings.
+        #[clap(long)]
+        transactions: Option<Utf8PathBuf>,
+    },
+    /// Decode a chosen-node ciphertext using a shared point already verified through Orbis.
+    AuditDecode {
+        request: Utf8PathBuf,
+        #[clap(long)]
+        node: String,
+    },
+    /// Reconstruct certificate bytes from a registration grant and chosen-node policy.
+    AuditRegistration {
+        request: Utf8PathBuf,
+        #[clap(long)]
+        node: String,
     },
     /// Validate a request without loading wallet or custody configuration.
     ValidateRequest { request: Utf8PathBuf },
@@ -220,16 +235,109 @@ async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk:
 impl DisclosureCmd {
     pub async fn exec(&self, home: &Utf8Path) -> Result<()> {
         match self {
-            Self::AuditCiphertext { selection, node } => {
+            Self::AuditRegistration { request, node } => {
+                let request: sdk::AuditRegistrationRequest =
+                    serde_json::from_slice(&read_bounded(request, sdk::MAX_DOCUMENT_BYTES)?)?;
+                let (chain, _) = accepted_blocks(node, BTreeSet::new()).await?;
+                let policy = match &request.registration {
+                    sdk::AuditRegistration::Person { action } => {
+                        use shieldd_sdk_proto::core::component::compliance::v1 as cpb;
+                        let channel = tonic::transport::Endpoint::from_shared(node.clone())?
+                            .connect_timeout(std::time::Duration::from_secs(10))
+                            .timeout(std::time::Duration::from_secs(30))
+                            .connect()
+                            .await?;
+                        let mut client = tonic::client::Grpc::new(channel)
+                            .max_decoding_message_size(sdk::MAX_DOCUMENT_BYTES);
+                        client.ready().await?;
+                        let response: tonic::Response<cpb::ComplianceAssetStatusResponse> = client
+                            .unary(
+                                tonic::Request::new(cpb::ComplianceAssetStatusRequest {
+                                    asset_id: Some(action.leaf.asset_id.into()),
+                                }),
+                                tonic::codegen::http::uri::PathAndQuery::from_static(
+                                    "/mizufinance.shieldd.v1.Query/ComplianceAssetStatus",
+                                ),
+                                tonic::codec::ProstCodec::default(),
+                            )
+                            .await?;
+                        let response = response.into_inner();
+                        ensure!(
+                            response.is_registered && response.is_regulated,
+                            "registered regulated asset unavailable"
+                        );
+                        let asset_id: shieldd_sdk_asset::asset::Id = response
+                            .asset_id
+                            .context("node omitted asset identity")?
+                            .try_into()?;
+                        ensure!(
+                            asset_id == action.leaf.asset_id,
+                            "node returned wrong asset identity"
+                        );
+                        Some(
+                            response
+                                .asset_policy
+                                .context("node omitted asset policy")?
+                                .try_into()?,
+                        )
+                    }
+                    sdk::AuditRegistration::General { .. } => None,
+                };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs();
+                let statement =
+                    sdk::prepare_audit_registration(&request, &chain, now, policy.as_ref())?;
+                println!("{}", serde_json::to_string(&statement)?);
+            }
+            Self::AuditDecode { request, node } => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct DecodeRequest {
+                    selection: sdk::AuditSelection,
+                    shared_point: [u8; 32],
+                }
+                let request: DecodeRequest =
+                    serde_json::from_slice(&read_bounded(request, sdk::MAX_DOCUMENT_BYTES)?)?;
+                let (chain, blocks) = accepted_blocks(
+                    node,
+                    [request.selection.reference.height].into_iter().collect(),
+                )
+                .await?;
+                let accepted = sdk::accepted_audit_ciphertext(
+                    request.selection,
+                    &chain,
+                    blocks.first().context("accepted block unavailable")?,
+                )?;
+                let decoded = sdk::decode_audit_ciphertext(&accepted, request.shared_point)?;
+                println!("{}", serde_json::to_string(&decoded)?);
+            }
+            Self::AuditCiphertext {
+                selection,
+                node,
+                transactions,
+            } => {
                 let selection: sdk::AuditSelection =
                     serde_json::from_slice(&read_bounded(selection, sdk::MAX_DOCUMENT_BYTES)?)?;
                 ensure!(
-                    selection.version == 1 && selection.reference.height > 0,
+                    selection.version == 2 && selection.reference.height > 0,
                     "invalid audit selection"
                 );
                 let (chain, blocks) =
                     accepted_blocks(node, [selection.reference.height].into_iter().collect())
                         .await?;
+                if let Some(path) = transactions {
+                    use base64::Engine;
+                    let encoded: Vec<String> =
+                        serde_json::from_slice(&read_bounded(path, sdk::MAX_PACKAGE_BYTES)?)?;
+                    ensure!(encoded.len() == 1, "expected one indexed audit transaction");
+                    let raw = base64::engine::general_purpose::STANDARD.decode(&encoded[0])?;
+                    sdk::verify_audit_candidate(
+                        &selection,
+                        blocks.first().context("accepted block unavailable")?,
+                        &raw,
+                    )?;
+                }
                 let accepted = sdk::accepted_audit_ciphertext(
                     selection,
                     &chain,
@@ -245,7 +353,7 @@ impl DisclosureCmd {
             }
             Self::Capabilities => println!(
                 "{}",
-                serde_json::json!({"protocol":1,"package_version":sdk::VERSION,"audit_ciphertext_version":1,"circuit":sdk::CIRCUIT_ID,"development_artifacts":cfg!(all(feature="development-disclosure-artifacts",debug_assertions))})
+                serde_json::json!({"protocol":1,"package_version":sdk::VERSION,"audit_ciphertext_version":2,"audit_registration_version":1,"circuit":sdk::CIRCUIT_ID,"development_artifacts":cfg!(all(feature="development-disclosure-artifacts",debug_assertions))})
             ),
             Self::Inspect { package } => {
                 let package = sdk::decode_package(&read_bounded(package, sdk::MAX_PACKAGE_BYTES)?)?;

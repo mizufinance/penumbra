@@ -9,12 +9,18 @@ use std::{
 
 #[path = "src/gnark_artifact_validation.rs"]
 mod gnark_artifact_validation;
+#[path = "src/production_approval.rs"]
+mod production_approval;
 
 include!("src/gen/gnark/transfer_families_build.rs");
 include!("src/gen/gnark/note_reshape_families_build.rs");
 include!("src/gen/gnark/shielded_withdrawal_families_build.rs");
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(approved_proof_artifacts)");
+    println!("cargo:rerun-if-changed=production_keys.json");
+    let approvals = include_bytes!("production_keys.json");
+    let mut all_approved = true;
     emit_family_rerun_hints().expect("emit proof-family rerun-if-changed hints");
     if cfg!(feature = "bundled-proving-keys") {
         emit_gnark_runtime_rerun_hints().expect("emit gnark runtime rerun-if-changed hints");
@@ -34,6 +40,23 @@ fn main() {
     }
 
     for family in gnark_artifact_validation::DEPLOYED_FAMILIES {
+        let metadata: gnark_artifact_validation::CircuitMetadataJson = serde_json::from_slice(
+            &std::fs::read(
+                artifact_root
+                    .join(family.label)
+                    .join("circuit_metadata.json"),
+            )
+            .expect("read proof metadata for production approval"),
+        )
+        .expect("parse proof metadata for production approval");
+        let key_hash = &metadata.verifying_key_binary_sha256_hex;
+        all_approved &= production_approval::approved(
+            approvals,
+            family.label,
+            key_hash,
+            &metadata.verifying_key_json_sha256_hex,
+        )
+        .expect("validate production proof-key approvals");
         gnark_artifact_validation::validate_repository_artifacts(&artifact_root, family)
             .unwrap_or_else(|error| {
                 panic!(
@@ -50,6 +73,10 @@ fn main() {
                     )
                 });
         }
+    }
+
+    if all_approved {
+        println!("cargo:rustc-cfg=approved_proof_artifacts");
     }
 
     write_bundled_gnark_runtime_paths().expect("failed while preparing bundled gnark runtime");

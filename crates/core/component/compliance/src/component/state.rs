@@ -326,8 +326,17 @@ impl ActionHandler for MsgRegisterAsset {
             current_unix >= 0,
             "current block timestamp is before Unix epoch"
         );
-        let admission =
-            AssetGrantAdmission::verify(self, registrar_authorized, current_unix as u64)?;
+        let chain_id = state
+            .get_raw("application/data/chain_id")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("chain id unavailable"))?;
+        let chain_id = String::from_utf8(chain_id)?;
+        let admission = AssetGrantAdmission::verify(
+            self,
+            registrar_authorized,
+            current_unix as u64,
+            &chain_id,
+        )?;
         let event_policy = admission.policy().clone();
         if let Some(result) = state.register_asset_with_grant(admission).await? {
             let event = crate::event::EventAssetRegistered {
@@ -393,6 +402,7 @@ mod tests {
             policy_id.to_string(),
             "read".to_owned(),
             "document".to_owned(),
+            crate::AuditKeys::test_keys(),
         );
         OrbisCapabilityCertificate::sign_for_test(
             TEST_CHAIN_ID,
@@ -422,6 +432,18 @@ mod tests {
             signature: registrar_sk.sign(OsRng, &body.signing_bytes()),
             body,
         });
+        if msg.is_regulated {
+            if let Ok(policy) = crate::registration::policy_from_asset_grant(&msg, valid_until_unix)
+            {
+                msg.audit_certificate = OrbisCapabilityCertificate::sign_general_for_test(
+                    TEST_CHAIN_ID,
+                    msg.asset_id,
+                    &policy,
+                    decaf377::Fr::from(1u64),
+                )
+                .ok();
+            }
+        }
         msg
     }
 
@@ -430,6 +452,8 @@ mod tests {
         authority_vk: VerificationKey<SpendAuth>,
     ) -> MsgRegisterAsset {
         MsgRegisterAsset {
+            audit_certificate: None,
+            audit_keys: Some(crate::AuditKeys::test_keys()),
             asset_id,
             is_regulated: true,
             dk_pub: Some(decaf377::Element::GENERATOR),
@@ -532,6 +556,7 @@ mod tests {
             decaf377::Element::GENERATOR,
             address.diversified_generator().clone(),
             Fq::from(1u64),
+            crate::AuditKeys::test_keys(),
         )
         .expect("fixed genesis compliance keys are valid");
 
@@ -539,6 +564,7 @@ mod tests {
         let dk_pub_bytes = decaf377::Element::GENERATOR.vartime_compress().0;
         let genesis = genesis::Content {
             native_assets: vec![NativeAssetRegistration {
+                audit_keys: Some(crate::AuditKeys::test_keys()),
                 asset_id: custom_asset,
                 is_regulated: true,
                 dk_pub: Some(dk_pub_bytes),
@@ -1138,6 +1164,8 @@ mod tests {
         // Create a register asset message (unregulated)
         let msg = sign_asset_registration(
             MsgRegisterAsset {
+                audit_certificate: None,
+                audit_keys: None,
                 asset_id,
                 is_regulated: false,
                 dk_pub: None,
@@ -1189,6 +1217,8 @@ mod tests {
         // Create a register asset message (regulated but missing dk_pub)
         let msg = sign_asset_registration(
             MsgRegisterAsset {
+                audit_certificate: None,
+                audit_keys: Some(crate::AuditKeys::test_keys()),
                 asset_id,
                 is_regulated: true,
                 dk_pub: None, // Missing!

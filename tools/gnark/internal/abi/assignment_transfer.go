@@ -123,6 +123,7 @@ func newTransferSharedAssignmentParts(
 		RnkDhPk:       point2DString(witness.SenderRnkDhPkAffine),
 		RnkCommitment: fqString(witness.SenderRnkCommitment),
 		Status:        fqString(witness.SenderStatus),
+		AuditKeys:     auditKeysInputs(witness.SenderAuditKeys),
 		Path:          senderPath,
 		Position:      witness.SenderCompliancePosition,
 	}
@@ -212,6 +213,7 @@ func newTransferComplianceFields(
 		TransferNonceRoot: fqString(witness.TransferNonceRoot),
 		Metadata: circuits.TransferComplianceMetadataFields{
 			RingIDHash:      fqString(witness.Metadata.RingIDHash),
+ AuditEpoch: fqString(witness.Metadata.AuditEpoch),
 			PolicyIDHash:    fqString(witness.Metadata.PolicyIDHash),
 			ResourceHash:    fqString(witness.Metadata.ResourceHash),
 			PermissionHash:  fqString(witness.Metadata.PermissionHash),
@@ -357,6 +359,7 @@ func newTransferReceiverOutputCircuitFields(
 			RnkDhPk:       point2DString(witness.RecipientRnkDhPkAffine),
 			RnkCommitment: fqString(witness.RecipientRnkCommitment),
 			Status:        fqString(witness.RecipientStatus),
+			AuditKeys:     auditKeysInputs(witness.RecipientAuditKeys),
 			Path:          recipientPath,
 			Position:      witness.RecipientCompliancePosition,
 		},

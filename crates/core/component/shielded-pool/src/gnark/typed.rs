@@ -13,6 +13,39 @@ pub struct PointAffineBytes {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuditKeysBinary {
+    pub epoch: u64,
+    pub amount: PointAffineBytes,
+    pub sender: PointAffineBytes,
+    pub receiver: PointAffineBytes,
+}
+
+impl AuditKeysBinary {
+    pub fn from_keys(keys: &shieldd_sdk_compliance::AuditKeys) -> Result<Self> {
+        Ok(Self {
+            epoch: keys.epoch,
+            amount: point_affine_bytes(keys.amount)?,
+            sender: point_affine_bytes(keys.sender)?,
+            receiver: point_affine_bytes(keys.receiver)?,
+        })
+    }
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
+        put_bytes(buf, &self.epoch.to_le_bytes());
+        for point in [&self.amount, &self.sender, &self.receiver] {
+            encode_point_affine(buf, point);
+        }
+    }
+    pub(crate) fn decode(cursor: &mut BinaryCursor<'_>) -> Result<Self> {
+        Ok(Self {
+            epoch: cursor.read_u64()?,
+            amount: cursor.read_point_affine()?,
+            sender: cursor.read_point_affine()?,
+            receiver: cursor.read_point_affine()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MerklePathBinary {
     pub layers: Vec<[[u8; 32]; 3]>,
 }
@@ -29,6 +62,7 @@ pub struct ComplianceLeafBinary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexedLeafBinary {
+    pub audit_keys: AuditKeysBinary,
     pub value: [u8; 32],
     pub next_index: u64,
     pub next_value: [u8; 32],
@@ -75,6 +109,7 @@ pub(crate) fn encode_indexed_leaf(buf: &mut Vec<u8>, leaf: &IndexedLeafBinary) {
     put_bytes(buf, &leaf.policy_id_hash);
     put_bytes(buf, &leaf.permission_hash);
     put_bytes(buf, &leaf.resource_hash);
+    leaf.audit_keys.encode(buf);
 }
 
 pub(crate) fn decode_indexed_leaf(cursor: &mut BinaryCursor<'_>) -> Result<IndexedLeafBinary> {
@@ -88,6 +123,7 @@ pub(crate) fn decode_indexed_leaf(cursor: &mut BinaryCursor<'_>) -> Result<Index
         policy_id_hash: cursor.read_fixed::<32>()?,
         permission_hash: cursor.read_fixed::<32>()?,
         resource_hash: cursor.read_fixed::<32>()?,
+        audit_keys: AuditKeysBinary::decode(cursor)?,
     })
 }
 
@@ -130,6 +166,8 @@ pub(crate) fn indexed_leaf_from_typed(leaf: &IndexedLeaf) -> IndexedLeafBinary {
         policy_id_hash: leaf.ring.policy_id_hash.to_bytes(),
         permission_hash: leaf.ring.permission_hash.to_bytes(),
         resource_hash: leaf.ring.resource_hash.to_bytes(),
+        audit_keys: AuditKeysBinary::from_keys(&leaf.ring.audit_keys)
+            .expect("validated nonidentity audit keys"),
     }
 }
 

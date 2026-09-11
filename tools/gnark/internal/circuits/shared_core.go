@@ -103,6 +103,7 @@ func ComplianceLeafCommitment(
 	rnkDhPk gnarkte.Point,
 	rnkCommitment frontend.Variable,
 	status frontend.Variable,
+	auditKeys AuditKeysInputs,
 ) (frontend.Variable, error) {
 	diversifiedGeneratorFq, err := decafgnark.CompressToField(api, diversifiedGenerator)
 	if err != nil {
@@ -122,6 +123,7 @@ func ComplianceLeafCommitment(
 		rnkDhPk,
 		rnkCommitment,
 		status,
+		auditKeys,
 	)
 }
 
@@ -134,6 +136,7 @@ func ComplianceLeafCommitmentFromCompressed(
 	rnkDhPk gnarkte.Point,
 	rnkCommitment frontend.Variable,
 	status frontend.Variable,
+	auditKeys AuditKeysInputs,
 ) (frontend.Variable, error) {
 	vectors, err := LoadPrototypeVectors()
 	if err != nil {
@@ -157,7 +160,7 @@ func ComplianceLeafCommitmentFromCompressed(
 		return nil, err
 	}
 
-	return Poseidon377Hash7(
+	base, err := Poseidon377Hash7(
 		api,
 		MustBigInt(vectors.Poseidon377.ComplianceLeafDomain),
 		[7]frontend.Variable{
@@ -170,6 +173,15 @@ func ComplianceLeafCommitmentFromCompressed(
 			status,
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	auditHash, err := AuditKeysCommitment(api, auditKeys)
+	if err != nil {
+		return nil, err
+	}
+	return Poseidon377Hash2(api, MustBigInt(vectors.Poseidon377.ComplianceLeafDomain), [2]frontend.Variable{base, auditHash})
+
 }
 
 // AssertActiveComplianceLifecycle constrains the packed lifecycle value.

@@ -30,6 +30,7 @@ type SpendAuthFields struct {
 }
 
 type IndexedLeafFields struct {
+	AuditKeys        compliance.AuditKeysInputs
 	Value            frontend.Variable
 	NextIndex        frontend.Variable
 	NextValue        frontend.Variable
@@ -50,6 +51,7 @@ type AssetTreeFields struct {
 }
 
 type TransferComplianceMetadataFields struct {
+ AuditEpoch frontend.Variable
 	RingIDHash      frontend.Variable
 	PolicyIDHash    frontend.Variable
 	ResourceHash    frontend.Variable

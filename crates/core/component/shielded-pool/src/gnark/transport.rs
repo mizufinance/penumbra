@@ -191,10 +191,6 @@ impl GnarkFamilyConfig {
 
     #[cfg(any(test, feature = "benchmark-helpers"))]
     pub fn require_test_prerequisites(&self, proving_key: &[u8]) -> Result<()> {
-        anyhow::ensure!(
-            !cfg!(debug_assertions),
-            "proof-generation tests require a release build"
-        );
         if self.env_override_configured() {
             let configured = self.configured_transport()?;
             let path = match configured.executable {

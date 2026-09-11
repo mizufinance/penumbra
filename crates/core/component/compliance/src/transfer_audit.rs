@@ -144,9 +144,7 @@ impl TransferTierCiphertext<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        crypto::derive_compliance_scalar, test_helpers::make_address, transfer::encrypt_transfer,
-    };
+    use crate::{test_helpers::make_address, transfer::encrypt_transfer};
     use decaf377::Fr;
     use rand::{rngs::StdRng, SeedableRng};
     use shieldd_sdk_asset::{asset, Value};
@@ -157,16 +155,22 @@ mod tests {
         let receiver = make_address(32);
         let ring_sk = Fr::from(29u64);
         let dk = Fr::from(37u64);
-        let ring_pk = Element::GENERATOR * ring_sk;
-        let sender_d = Fr::from_le_bytes_mod_order(&derive_compliance_scalar(&sender).to_bytes());
-        let receiver_d =
-            Fr::from_le_bytes_mod_order(&derive_compliance_scalar(&receiver).to_bytes());
+        let keys = |first: u64| crate::AuditKeys {
+            epoch: 1,
+            amount: Element::GENERATOR * Fr::from(first),
+            sender: Element::GENERATOR * Fr::from(first + 1),
+            receiver: Element::GENERATOR * Fr::from(first + 2),
+        };
+        let general = keys(29);
+        let sender_keys = keys(101);
+        let receiver_keys = keys(104);
         let amount = Amount::from(u128::MAX);
         let metadata = TransferComplianceMetadata::from_identifiers(
             "ring",
             "policy",
             "resource",
             "read",
+            1,
             1,
             Fq::from(1u64),
             Fq::from(2u64),
@@ -176,9 +180,9 @@ mod tests {
         for flagged in [false, true] {
             let encrypted = encrypt_transfer(
                 StdRng::seed_from_u64(17),
-                &ring_pk,
-                &(ring_pk * sender_d),
-                &(ring_pk * receiver_d),
+                &general,
+                &sender_keys,
+                &receiver_keys,
                 &(Element::GENERATOR * dk),
                 &receiver,
                 &sender,
@@ -196,7 +200,12 @@ mod tests {
                 TransferComplianceCiphertext::from_bytes(&encrypted.ciphertext.to_bytes()).unwrap();
             for selection in crate::master_wrapping::MasterSelection::ALL {
                 let selected = selection.tier().select(&decoded, &metadata).unwrap();
-                let shared = selected.epk * if flagged { dk } else { ring_sk };
+                let shared = selected.epk
+                    * if flagged {
+                        dk
+                    } else {
+                        Fr::from(29 + selection as u64)
+                    };
                 let expected = match selection {
                     crate::master_wrapping::MasterSelection::Amount => {
                         TransferAuditData::Amount(amount)
@@ -245,7 +254,12 @@ mod tests {
                 let key = if flagged {
                     dk
                 } else {
-                    ring_sk * if sender_tier { sender_d } else { receiver_d }
+                    Fr::from(match tier {
+                        TransferTier::SenderCore => 101u64,
+                        TransferTier::SenderExt => 103,
+                        TransferTier::OutputCore => 104,
+                        TransferTier::OutputExt => 105,
+                    })
                 };
                 let result = selected.decrypt(&(selected.epk * key)).unwrap();
                 let expected = match tier {
@@ -261,8 +275,6 @@ mod tests {
                     }
                 };
                 assert_eq!(result, expected);
-                // Actual ordinary ciphertext uses the address-derived key for every tier.
-                // Possession of the base ring secret alone does not remove that derivation.
                 if !flagged {
                     assert!(selected.decrypt(&(selected.epk * ring_sk)).is_err());
                 }

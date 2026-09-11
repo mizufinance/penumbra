@@ -43,12 +43,22 @@ registration can mutate durable state. This prevents a regulated asset from
 selecting a degenerate detection or audit key even if its membership witness is
 otherwise valid.
 
-A user registers a `(shielded address, asset)` compliance leaf:
+The asset policy commits a general-scope `AuditKeys` bundle; each user leaf
+commits a person-scope bundle. Each contains an epoch and three independent
+Decaf377 public keys for amount, sender and receiver. Encryptors obtain them
+from authenticated registry membership; they cannot derive them from `ring_pk`.
 
-```text
-d   = SHA512("elgamal-derivation-v1\0\0" || canonical_address_bytes) reduced mod Fr
-ACK = d * ring_pk
-```
+Orbis evaluates LaKey through MPC over chain, ring, epoch, person/general scope
+and field. Asset is bound by registration certificates and ACP, not in the PRF.
+Certificate admission checks the grant, current policy, root ring signature and
+registrar authority. Genesis keys are part of explicitly trusted genesis state.
+All selected regulated bundles have the same nonzero epoch.
+
+The address-derived capsule capability and regulated nullifier key remain
+separate from audit encryption. Public scalar derivation must not be used for
+audit PRE. Orbis passes transient LaKey shares into Decaf377 PRE without a
+further derivation scalar. General scope is independently encrypted; the LaKey
+master is not a universal decryption key for person scopes.
 
 For regulated participation, ACP permits exactly one live shielded address per
 KYC identity. Shieldd's generic diversified-address capability does not admit
@@ -56,7 +66,7 @@ additional regulated addresses; only the ACP-approved address may appear in a
 regulated user leaf.
 
 The leaf commits to the address encodings, asset ID, capsule capability,
-compliance-nullifier-key commitment, and lifecycle. Registration checks the
+compliance-nullifier-key commitment, audit-key bundle, and lifecycle. Registration checks the
 canonical address, capability derivation, and authorization. A derived `d = 0`
 is rejected. The same address may register independently for multiple assets.
 

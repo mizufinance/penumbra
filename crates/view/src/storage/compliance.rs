@@ -9,6 +9,7 @@ use shieldd_sdk_tct::StateCommitment;
 /// commitment hash depends on every policy field.
 #[derive(Debug, Clone)]
 pub struct IndexedLeafData {
+    pub audit_keys: shieldd_sdk_compliance::AuditKeys,
     pub value: [u8; 32],
     pub next_index: u64,
     pub next_value: [u8; 32],
@@ -25,6 +26,7 @@ pub struct IndexedLeafData {
 /// Full compliance user leaf data kept for addresses in sync scope.
 #[derive(Debug, Clone)]
 pub struct UserLeafData {
+    pub audit_keys: shieldd_sdk_compliance::AuditKeys,
     pub position: u64,
     pub capk: [u8; 32],
     pub rnk_dh_pk: [u8; 32],
@@ -184,7 +186,7 @@ impl ComplianceTreeStore<'_, '_> {
             .0
             .prepare_cached(
                 "SELECT value, next_index, next_value, dk_pub, daily_volume_limit, \
-                 route_policy_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash \
+                 route_policy_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash, audit_keys \
                  FROM compliance_asset_leaves WHERE position = ?1",
             )
             .context("failed to prepare asset leaf query")?;
@@ -203,6 +205,7 @@ impl ComplianceTreeStore<'_, '_> {
                     row.get::<_, Vec<u8>>("policy_id_hash")?,
                     row.get::<_, Vec<u8>>("permission_hash")?,
                     row.get::<_, Vec<u8>>("resource_hash")?,
+                    row.get::<_, Vec<u8>>("audit_keys")?,
                 ))
             })
             .optional()
@@ -221,6 +224,7 @@ impl ComplianceTreeStore<'_, '_> {
                 policy_id_hash,
                 permission_hash,
                 resource_hash,
+                audit_keys,
             )) => {
                 let to_arr = |v: Vec<u8>, name: &str| -> anyhow::Result<[u8; 32]> {
                     v.try_into().map_err(|v: Vec<u8>| {
@@ -269,6 +273,7 @@ impl ComplianceTreeStore<'_, '_> {
                     policy_id_hash,
                     permission_hash,
                     resource_hash,
+                    audit_keys: shieldd_sdk_compliance::AuditKeys::from_bytes(&audit_keys)?,
                 }))
             }
             None => Ok(None),
@@ -295,8 +300,8 @@ impl ComplianceTreeStore<'_, '_> {
             .prepare_cached(
                 "INSERT OR REPLACE INTO compliance_asset_leaves \
                  (position, value, next_index, next_value, dk_pub, daily_volume_limit, \
-                  route_policy_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  route_policy_hash, ring_pk, ring_id_hash, policy_id_hash, permission_hash, resource_hash, audit_keys) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )
             .context("failed to prepare asset leaf insert")?
             .execute((
@@ -312,6 +317,7 @@ impl ComplianceTreeStore<'_, '_> {
                 &leaf.policy_id_hash.to_vec(),
                 &leaf.permission_hash.to_vec(),
                 &leaf.resource_hash.to_vec(),
+                &leaf.audit_keys.to_bytes().to_vec(),
             ))
             .context("failed to insert asset leaf")?;
 
@@ -508,6 +514,7 @@ impl ComplianceTreeStore<'_, '_> {
         capk: &[u8],
         rnk_dh_pk: &[u8],
         rnk_commitment: &[u8],
+        audit_keys: &shieldd_sdk_compliance::AuditKeys,
         status: shieldd_sdk_compliance::UserAssetStatus,
         freeze_generation: u64,
         frozen_since_height: u64,
@@ -521,8 +528,8 @@ impl ComplianceTreeStore<'_, '_> {
         self.0
             .prepare_cached(
                 "INSERT OR REPLACE INTO compliance_user_leaf_data \
-                 (address, asset_id, position, capk, rnk_dh_pk, rnk_commitment, status, freeze_generation, frozen_since_height, commitment) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 (address, asset_id, position, capk, rnk_dh_pk, rnk_commitment, status, freeze_generation, frozen_since_height, commitment, audit_keys) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )
             .context("failed to prepare leaf data insert")?
             .execute((
@@ -537,6 +544,7 @@ impl ComplianceTreeStore<'_, '_> {
                 &freeze_generation,
                 &frozen_since_height,
                 &commitment,
+                &audit_keys.to_bytes().to_vec(),
             ))
             .context("failed to insert leaf data")?;
 
@@ -563,7 +571,7 @@ impl ComplianceTreeStore<'_, '_> {
         let mut stmt = self
             .0
             .prepare_cached(
-                "SELECT position, capk, rnk_dh_pk, rnk_commitment, status, freeze_generation, frozen_since_height, commitment \
+                "SELECT position, capk, rnk_dh_pk, rnk_commitment, status, freeze_generation, frozen_since_height, commitment, audit_keys \
                  FROM compliance_user_leaf_data \
                  WHERE address = ?1 AND asset_id = ?2",
             )
@@ -579,6 +587,7 @@ impl ComplianceTreeStore<'_, '_> {
                 let freeze_generation: i64 = row.get("freeze_generation")?;
                 let frozen_since_height: i64 = row.get("frozen_since_height")?;
                 let commitment: Vec<u8> = row.get("commitment")?;
+                let audit_keys: Vec<u8> = row.get("audit_keys")?;
                 Ok((
                     position,
                     capk,
@@ -588,6 +597,7 @@ impl ComplianceTreeStore<'_, '_> {
                     freeze_generation,
                     frozen_since_height,
                     commitment,
+                    audit_keys,
                 ))
             })
             .optional()
@@ -603,6 +613,7 @@ impl ComplianceTreeStore<'_, '_> {
                 freeze_generation,
                 frozen_since_height,
                 commitment,
+                audit_keys,
             )) => {
                 let capk: [u8; 32] = capk.try_into().map_err(|v: Vec<u8>| {
                     anyhow::anyhow!("leaf data capk must be 32 bytes, got {}", v.len())
@@ -624,6 +635,7 @@ impl ComplianceTreeStore<'_, '_> {
                     )
                 })?;
                 Ok(Some(UserLeafData {
+                    audit_keys: shieldd_sdk_compliance::AuditKeys::from_bytes(&audit_keys)?,
                     position: position as u64,
                     capk,
                     rnk_dh_pk,
@@ -774,6 +786,7 @@ mod tests {
             policy_id_hash: [13u8; 32],
             permission_hash: [14u8; 32],
             resource_hash: [15u8; 32],
+            audit_keys: shieldd_sdk_compliance::AuditKeys::unregulated(),
         };
         store.add_asset_leaf(0, leaf).unwrap();
         let retrieved = store.get_asset_leaf(0).unwrap().unwrap();
@@ -817,6 +830,7 @@ mod tests {
                 &[10u8; 32],
                 &[11u8; 32],
                 &[12u8; 32],
+                &shieldd_sdk_compliance::AuditKeys::unregulated(),
                 shieldd_sdk_compliance::UserAssetStatus::Frozen,
                 4,
                 120,

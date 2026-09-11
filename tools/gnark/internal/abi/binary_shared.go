@@ -22,7 +22,15 @@ type MerklePathBinary struct {
 	Layers [][][32]byte
 }
 
+type AuditKeysBinary struct {
+	Epoch    uint64
+	Amount   PointAffineBinary
+	Sender   PointAffineBinary
+	Receiver PointAffineBinary
+}
+
 type IndexedLeafBinary struct {
+	AuditKeys        AuditKeysBinary
 	Value            [32]byte
 	NextIndex        uint64
 	NextValue        [32]byte
@@ -241,6 +249,27 @@ func readIndexedLeaf(r io.Reader) (IndexedLeafBinary, error) {
 		return out, err
 	}
 	if out.ResourceHash, err = read32(r); err != nil {
+		return out, err
+	}
+	if out.AuditKeys, err = readAuditKeys(r); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func readAuditKeys(r io.Reader) (AuditKeysBinary, error) {
+	var out AuditKeysBinary
+	var err error
+	if out.Epoch, err = readU64(r); err != nil {
+		return out, err
+	}
+	if out.Amount, err = readPointAffine(r); err != nil {
+		return out, err
+	}
+	if out.Sender, err = readPointAffine(r); err != nil {
+		return out, err
+	}
+	if out.Receiver, err = readPointAffine(r); err != nil {
 		return out, err
 	}
 	return out, nil

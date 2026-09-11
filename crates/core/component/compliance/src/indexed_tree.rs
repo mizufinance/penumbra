@@ -128,6 +128,7 @@ impl Default for LeafParams {
 /// Orbis-decided policy fields bound into the IMT leaf.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeafRing {
+    pub audit_keys: crate::AuditKeys,
     pub ring_pk: decaf377::Element,
     pub ring_id_hash: Fq,
     pub policy_id_hash: Fq,
@@ -139,6 +140,7 @@ impl LeafRing {
     /// Construct from RingData (hashes all string fields).
     pub fn from_ring_data(r: &RingData) -> Self {
         Self {
+            audit_keys: r.audit_keys.clone(),
             ring_pk: r.ring_pk,
             ring_id_hash: string_to_fq(&r.ring_id),
             policy_id_hash: string_to_fq(&r.policy_id),
@@ -151,6 +153,7 @@ impl LeafRing {
 impl Default for LeafRing {
     fn default() -> Self {
         Self {
+            audit_keys: crate::AuditKeys::unregulated(),
             ring_pk: *crate::crypto::UNREGULATED_SINK_RING_PK,
             ring_id_hash: string_to_fq(""),
             policy_id_hash: string_to_fq(""),
@@ -175,7 +178,7 @@ static DEFAULT_PARAMS_HASH: Lazy<Fq> = Lazy::new(|| {
 static DEFAULT_RING_HASH: Lazy<Fq> = Lazy::new(|| {
     let r = LeafRing::default();
     let ring_pk_fq = r.ring_pk.vartime_compress_to_field();
-    poseidon377::hash_5(
+    let base = poseidon377::hash_5(
         &RING_DOMAIN_SEP,
         (
             ring_pk_fq,
@@ -184,7 +187,8 @@ static DEFAULT_RING_HASH: Lazy<Fq> = Lazy::new(|| {
             r.permission_hash,
             r.resource_hash,
         ),
-    )
+    );
+    poseidon377::hash_2(&RING_DOMAIN_SEP, (base, r.audit_keys.commitment()))
 });
 
 /// Precomputed zero hashes for each level of the IMT.
@@ -305,7 +309,7 @@ impl IndexedLeaf {
         );
 
         let ring_pk_fq = self.ring.ring_pk.vartime_compress_to_field();
-        let ring_hash = poseidon377::hash_5(
+        let base_ring_hash = poseidon377::hash_5(
             &RING_DOMAIN_SEP,
             (
                 ring_pk_fq,
@@ -316,6 +320,10 @@ impl IndexedLeaf {
             ),
         );
 
+        let ring_hash = poseidon377::hash_2(
+            &RING_DOMAIN_SEP,
+            (base_ring_hash, self.ring.audit_keys.commitment()),
+        );
         IndexedLeafCommitments {
             params_hash,
             ring_hash,
@@ -354,6 +362,7 @@ impl IndexedLeaf {
 
 #[derive(Serialize, Deserialize)]
 struct IndexedLeafSerde {
+    audit_keys: crate::AuditKeys,
     value: [u8; 32],
     next_index: u64,
     next_value: [u8; 32],
@@ -384,6 +393,7 @@ impl Serialize for IndexedLeaf {
             policy_id_hash: self.ring.policy_id_hash.to_bytes(),
             permission_hash: self.ring.permission_hash.to_bytes(),
             resource_hash: self.ring.resource_hash.to_bytes(),
+            audit_keys: self.ring.audit_keys.clone(),
         };
         helper.serialize(serializer)
     }
@@ -432,6 +442,7 @@ impl<'de> Deserialize<'de> for IndexedLeaf {
                 policy_id_hash,
                 permission_hash,
                 resource_hash,
+                audit_keys: h.audit_keys,
             },
         })
     }
@@ -457,6 +468,7 @@ impl From<IndexedLeaf> for pb::IndexedLeafData {
             policy_id_hash: leaf.ring.policy_id_hash.to_bytes().to_vec(),
             permission_hash: leaf.ring.permission_hash.to_bytes().to_vec(),
             resource_hash: leaf.ring.resource_hash.to_bytes().to_vec(),
+            audit_keys: leaf.ring.audit_keys.to_bytes().to_vec(),
         }
     }
 }
@@ -527,6 +539,7 @@ impl TryFrom<pb::IndexedLeafData> for IndexedLeaf {
                 policy_id_hash,
                 permission_hash,
                 resource_hash,
+                audit_keys: crate::AuditKeys::from_bytes(&proto.audit_keys)?,
             },
         })
     }
@@ -592,6 +605,7 @@ impl Serialize for IndexedMerkleTree {
                         policy_id_hash: v.ring.policy_id_hash.to_bytes(),
                         permission_hash: v.ring.permission_hash.to_bytes(),
                         resource_hash: v.ring.resource_hash.to_bytes(),
+                        audit_keys: v.ring.audit_keys.clone(),
                     },
                 )
             })
@@ -676,6 +690,7 @@ impl<'de> Deserialize<'de> for IndexedMerkleTree {
                             policy_id_hash,
                             permission_hash,
                             resource_hash,
+                            audit_keys: h.audit_keys,
                         },
                     },
                 ))

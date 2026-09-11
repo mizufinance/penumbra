@@ -59,6 +59,7 @@ func indexedLeafInputsFromIndexedLeafBinary(
 	ringPK PointAffineBinary,
 ) compliance.IndexedLeafInputs {
 	return compliance.IndexedLeafInputs{
+		AuditKeys:        auditKeysInputs(leaf.AuditKeys),
 		Value:            primitives.LittleEndianBytesToBigInt(leaf.Value[:]).String(),
 		NextIndex:        leaf.NextIndex,
 		NextValue:        primitives.LittleEndianBytesToBigInt(leaf.NextValue[:]).String(),
@@ -79,6 +80,7 @@ func indexedLeafFieldsFromIndexedLeafBinary(
 	ringPK PointAffineBinary,
 ) circuits.IndexedLeafFields {
 	return circuits.IndexedLeafFields{
+		AuditKeys: auditKeysInputs(leaf.AuditKeys),
 		Value:     primitives.LittleEndianBytesToBigInt(leaf.Value[:]).String(),
 		NextIndex: leaf.NextIndex,
 		NextValue: primitives.LittleEndianBytesToBigInt(leaf.NextValue[:]).String(),
@@ -154,24 +156,11 @@ func noteFields(
 	}
 }
 
-func indexedLeafFields(
-	value, nextValue, daily_volume_limit, routePolicyHash frontend.Variable,
-	nextIndex frontend.Variable,
-	dkPubX, dkPubY frontend.Variable,
-	ringPKX, ringPKY frontend.Variable,
-	ringIDHash, policyIDHash, permissionHash, resourceHash frontend.Variable,
-) circuits.IndexedLeafFields {
-	return circuits.IndexedLeafFields{
-		Value:            value,
-		NextIndex:        nextIndex,
-		NextValue:        nextValue,
-		DKPub:            circuits.Point2D{X: dkPubX, Y: dkPubY},
-		DailyVolumeLimit: daily_volume_limit,
-		RoutePolicyHash:  routePolicyHash,
-		RingPK:           circuits.Point2D{X: ringPKX, Y: ringPKY},
-		RingIDHash:       ringIDHash,
-		PolicyIDHash:     policyIDHash,
-		PermissionHash:   permissionHash,
-		ResourceHash:     resourceHash,
+func auditKeysInputs(keys AuditKeysBinary) compliance.AuditKeysInputs {
+	return compliance.AuditKeysInputs{
+		Epoch:    keys.Epoch,
+		Amount:   circuits.PointAffineToNative(pointAffineBinaryToStrings(keys.Amount)),
+		Sender:   circuits.PointAffineToNative(pointAffineBinaryToStrings(keys.Sender)),
+		Receiver: circuits.PointAffineToNative(pointAffineBinaryToStrings(keys.Receiver)),
 	}
 }

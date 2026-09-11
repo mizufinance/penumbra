@@ -7,7 +7,7 @@ import (
 	"github.com/mizufinance/shieldd/tools/gnark/internal/generated"
 )
 
-const transferWitnessMagic = "PTWG"
+const transferWitnessMagic = "PTW2"
 
 type TransferComplianceCiphertextWitnessBinary struct {
 	C2         [32]byte
@@ -16,6 +16,7 @@ type TransferComplianceCiphertextWitnessBinary struct {
 }
 
 type TransferComplianceMetadataWitnessBinary struct {
+ AuditEpoch [32]byte
 	RingIDHash      [32]byte
 	PolicyIDHash    [32]byte
 	ResourceHash    [32]byte
@@ -66,6 +67,7 @@ type TransferReceiverOutputWitnessBinary struct {
 	RecipientRnkDhPkAffine        PointAffineBinary
 	RecipientRnkCommitment        [32]byte
 	RecipientStatus               [32]byte
+	RecipientAuditKeys            AuditKeysBinary
 	RecipientDiversifiedGenerator PointAffineBinary
 	RecipientTransmissionKey      PointAffineBinary
 }
@@ -123,6 +125,7 @@ type TransferWitnessBinary struct {
 	SenderRnkDhPkAffine      PointAffineBinary
 	SenderRnkCommitment      [32]byte
 	SenderStatus             [32]byte
+	SenderAuditKeys          AuditKeysBinary
 	TransferNonceRoot        [32]byte
 
 	DetectionCiphertext       [][32]byte
@@ -259,6 +262,9 @@ func decodeTransferWitness(
 		return nil, err
 	}
 	if witness.SenderStatus, err = read32(reader); err != nil {
+		return nil, err
+	}
+	if witness.SenderAuditKeys, err = readAuditKeys(reader); err != nil {
 		return nil, err
 	}
 	if witness.TransferNonceRoot, err = read32(reader); err != nil {
@@ -511,6 +517,9 @@ func readTransferReceiverOutput(
 	if output.RecipientStatus, err = read32(reader); err != nil {
 		return output, err
 	}
+	if output.RecipientAuditKeys, err = readAuditKeys(reader); err != nil {
+		return output, err
+	}
 	if output.RecipientDiversifiedGenerator, err = readPointAffine(reader); err != nil {
 		return output, err
 	}
@@ -580,6 +589,7 @@ func readTransferComplianceMetadata(
 	if metadata.TargetTimestamp, err = read32(reader); err != nil {
 		return metadata, err
 	}
+ if metadata.AuditEpoch, err = read32(reader); err != nil { return metadata, err }
 	if metadata.SenderCoreSalt, err = read32(reader); err != nil {
 		return metadata, err
 	}

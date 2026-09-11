@@ -149,6 +149,7 @@ impl From<Content> for pb::GenesisContent {
 /// Registration configuration for a native asset at genesis.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct NativeAssetRegistration {
+    pub audit_keys: Option<crate::AuditKeys>,
     /// The asset ID to register.
     pub asset_id: asset::Id,
     /// Whether this asset is regulated (requires compliance proofs).
@@ -209,7 +210,8 @@ impl NativeAssetRegistration {
                 "unregulated genesis asset cannot set compliance authorities"
             );
             anyhow::ensure!(
-                self.ring_pk.is_none()
+                self.audit_keys.is_none()
+                    && self.ring_pk.is_none()
                     && self.ring_id.is_empty()
                     && self.policy_id.is_empty()
                     && self.permission.is_empty()
@@ -246,6 +248,9 @@ impl NativeAssetRegistration {
             self.policy_id.clone(),
             self.permission.clone(),
             self.resource.clone(),
+            self.audit_keys
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("regulated genesis asset requires audit keys"))?,
         )
         .with_registration_authority(registration_authority_vk)
         .with_seizure_authority(seizure_authority_vk);
@@ -268,6 +273,11 @@ impl TryFrom<pb::NativeAssetRegistration> for NativeAssetRegistration {
                 .ok_or_else(|| anyhow::anyhow!("missing genesis native asset_id"))?
                 .try_into()?,
             is_regulated: value.is_regulated,
+            audit_keys: if value.audit_keys.is_empty() {
+                None
+            } else {
+                Some(crate::AuditKeys::from_bytes(&value.audit_keys)?)
+            },
             dk_pub: if value.dk_pub.is_empty() {
                 None
             } else {
@@ -315,6 +325,10 @@ impl From<NativeAssetRegistration> for pb::NativeAssetRegistration {
         Self {
             asset_id: Some(value.asset_id.into()),
             is_regulated: value.is_regulated,
+            audit_keys: value
+                .audit_keys
+                .map(|keys| keys.to_bytes().to_vec())
+                .unwrap_or_default(),
             dk_pub: value.dk_pub.map(Vec::from).unwrap_or_default(),
             registration_authority_vk: value.registration_authority_vk.map(Into::into),
             seizure_authority_vk: value.seizure_authority_vk.map(Into::into),
@@ -351,6 +365,7 @@ mod tests {
         let content = Content {
             compliance_registrar_vk: vec![authority],
             native_assets: vec![NativeAssetRegistration {
+                audit_keys: Some(crate::AuditKeys::test_keys()),
                 asset_id: asset::Id(decaf377::Fq::from(2u64)),
                 is_regulated: true,
                 dk_pub: Some(decaf377::Element::GENERATOR.vartime_compress().0),
@@ -391,6 +406,7 @@ mod tests {
 
         let authority_content = Content {
             native_assets: vec![NativeAssetRegistration {
+                audit_keys: None,
                 asset_id: asset::Id(decaf377::Fq::from(1u64)),
                 is_regulated: false,
                 dk_pub: None,
@@ -419,6 +435,7 @@ mod tests {
     fn regulated_genesis_asset_requires_complete_orbis_configuration() {
         let authority = VerificationKey::from(&SigningKey::<SpendAuth>::from(Fr::from(7u64)));
         let mut registration = NativeAssetRegistration {
+            audit_keys: Some(crate::AuditKeys::test_keys()),
             asset_id: asset::Id(decaf377::Fq::from(2u64)),
             is_regulated: true,
             dk_pub: Some(decaf377::Element::GENERATOR.vartime_compress().0),

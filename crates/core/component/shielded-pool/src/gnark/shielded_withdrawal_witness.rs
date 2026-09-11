@@ -1,3 +1,4 @@
+use crate::gnark::typed::AuditKeysBinary;
 use anyhow::{anyhow, bail, Result};
 use decaf377::{Encoding, Fq};
 use shieldd_sdk_asset::Balance;
@@ -84,6 +85,7 @@ pub struct ShieldedWithdrawalWitness {
     pub sender_rnk_dh_pk_affine: PointAffineBytes,
     pub sender_rnk_commitment: [u8; 32],
     pub sender_status: [u8; 32],
+    pub sender_audit_keys: AuditKeysBinary,
     pub withdrawal_seed: [u8; 32],
     pub withdrawal_randomizer: [u8; 32],
     pub volume_accumulator: TransferVolumeAccumulatorWitness,
@@ -318,6 +320,7 @@ impl ShieldedWithdrawalWitness {
             sender_rnk_dh_pk_affine,
             sender_rnk_commitment,
             sender_status,
+            sender_audit_keys: AuditKeysBinary::from_keys(&private.sender_leaf.audit_keys)?,
             withdrawal_seed: private.withdrawal_seed.to_bytes(),
             withdrawal_randomizer: private.withdrawal_randomizer.to_bytes(),
             volume_accumulator,

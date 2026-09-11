@@ -3,6 +3,12 @@
 // Requires nightly.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(all(not(debug_assertions), not(approved_proof_artifacts)))]
+compile_error!("Release verification requires approved circuit keys in proof-params/production_keys.json; development setup keys are not production approved.");
+
+#[cfg(test)]
+mod production_approval;
+
 use anyhow::{bail, Result};
 use ark_ec::{pairing::Pairing, AffineRepr};
 use ark_ff::PrimeField;

@@ -255,6 +255,7 @@ impl ComplianceAssetTree {
                     route_policy_hash,
                 },
                 ring: LeafRing {
+                    audit_keys: leaf_data.audit_keys,
                     ring_pk,
                     ring_id_hash,
                     policy_id_hash,
@@ -397,6 +398,7 @@ impl ComplianceAssetTree {
                     policy_id_hash: leaf.ring.policy_id_hash.to_bytes(),
                     permission_hash: leaf.ring.permission_hash.to_bytes(),
                     resource_hash: leaf.ring.resource_hash.to_bytes(),
+                    audit_keys: leaf.ring.audit_keys.clone(),
                 };
                 Ok(ComplianceAssetTreeWrite { position, leaf })
             })

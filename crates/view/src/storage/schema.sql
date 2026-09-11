@@ -196,7 +196,8 @@ CREATE TABLE compliance_asset_leaves (
     ring_id_hash BLOB NOT NULL,    -- 32 bytes Fq
     policy_id_hash BLOB NOT NULL,  -- 32 bytes Fq
     permission_hash BLOB NOT NULL, -- 32 bytes Fq
-    resource_hash BLOB NOT NULL    -- 32 bytes Fq
+    resource_hash BLOB NOT NULL,    -- 32 bytes Fq
+    audit_keys BLOB NOT NULL CHECK(length(audit_keys) = 104)
 );
 
 -- Internal hashes for asset tree auth paths
@@ -224,6 +225,7 @@ CREATE TABLE compliance_user_leaf_data (
     capk BLOB NOT NULL,                -- 32-byte compressed Decaf point
     rnk_dh_pk BLOB NOT NULL,           -- 32-byte compressed Decaf point
     rnk_commitment BLOB NOT NULL,      -- 32-byte Fq
+    audit_keys BLOB NOT NULL CHECK(length(audit_keys) = 104),
     status INTEGER NOT NULL,
     freeze_generation BIGINT NOT NULL,
     frozen_since_height BIGINT NOT NULL,

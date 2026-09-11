@@ -189,6 +189,14 @@ func verifyRoutingAssetRegistry(
 	if err != nil {
 		return err
 	}
+	auditHash, err := AuditKeysCommitment(api, asset.Leaf.AuditKeys)
+	if err != nil {
+		return err
+	}
+	ringHash, err = Poseidon377Hash2(api, MustBigInt(vectors.Poseidon377.IMTRingDomain), [2]frontend.Variable{ringHash, auditHash})
+	if err != nil {
+		return err
+	}
 	bind("asset.leaf.ring_hash", ringHash)
 	trace(
 		"gadget.asset_registry_leaf_hash",

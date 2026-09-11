@@ -36,6 +36,8 @@ message ComplianceLeaf {
   uint64 freeze_generation = 7;
   // Block height at which the current freeze generation began. Zero unless frozen or seized.
   uint64 frozen_since_height = 8;
+  // Canonical epoch and three registered LaKey audit public keys.
+  bytes audit_keys = 9;
 }
 
 // Per-address authorization state for one regulated asset.
@@ -78,6 +80,8 @@ message MsgRegisterAsset {
   IbcAssetOrigin ibc_origin = 13;
   // Immutable authority key that authorizes note seizures for this asset.
   crypto.decaf377_rdsa.v1.SpendVerificationKey seizure_authority_vk = 14;
+  bytes audit_keys = 16;
+  OrbisCapabilityCertificate audit_certificate = 17;
 }
 
 // Body signed by a chain compliance registrar to authorize an asset policy.
@@ -96,6 +100,7 @@ message AssetRegistrationGrantBody {
   uint64 valid_until_unix = 12;
   IbcAssetOrigin ibc_origin = 13;
   crypto.decaf377_rdsa.v1.SpendVerificationKey seizure_authority_vk = 14;
+  bytes audit_keys = 15;
 }
 
 // A direct ICS-20 route bound to local committed IBC identifiers.
@@ -339,6 +344,7 @@ message IndexedLeafData {
   bytes policy_id_hash = 9;
   bytes permission_hash = 10;
   bytes resource_hash = 11;
+  bytes audit_keys = 13;
 }
 
 // Full asset compliance policy (state-only, not in Merkle commitment).
@@ -356,6 +362,7 @@ message AssetPolicy {
   crypto.decaf377_rdsa.v1.SpendVerificationKey registration_authority_vk = 9;
   IbcAssetOrigin ibc_origin = 10;
   crypto.decaf377_rdsa.v1.SpendVerificationKey seizure_authority_vk = 11;
+  bytes audit_keys = 12;
 }
 
 // Genesis configuration for the compliance component.
@@ -385,6 +392,7 @@ message NativeAssetRegistration {
   string policy_id = 8;
   string permission = 9;
   string resource = 10;
+  bytes audit_keys = 11;
 }
 
 message DleqProof {

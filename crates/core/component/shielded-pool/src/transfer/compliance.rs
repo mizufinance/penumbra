@@ -155,13 +155,11 @@ pub(crate) fn build_transfer_compliance(
         *shieldd_sdk_compliance::UNREGULATED_SINK_DK_PUB
     };
 
-    let ring_pk = if context.witness.asset.is_regulated {
-        asset_indexed_leaf.ring.ring_pk
+    let general_keys = if context.witness.asset.is_regulated {
+        asset_indexed_leaf.ring.audit_keys.clone()
     } else {
-        *shieldd_sdk_compliance::UNREGULATED_SINK_RING_PK
+        shieldd_sdk_compliance::AuditKeys::unregulated()
     };
-    let sender_ack = sender_leaf.capk;
-    let receiver_ack = receiver_leaf.capk;
 
     let detection_salt = derive_transfer_salt(transfer_nonce_root, b"detection");
     let sender_core_salt = derive_transfer_salt(transfer_nonce_root, b"sender_core");
@@ -172,9 +170,9 @@ pub(crate) fn build_transfer_compliance(
 
     let encryption = encrypt_transfer(
         &mut rng,
-        &ring_pk,
-        &sender_ack,
-        &receiver_ack,
+        &general_keys,
+        &sender_leaf.audit_keys,
+        &receiver_leaf.audit_keys,
         &dk_pub,
         &receiver_note.address(),
         &sender_leaf.address,
@@ -212,6 +210,7 @@ pub(crate) fn build_transfer_compliance(
         resource,
         permission,
         target_timestamp,
+        general_keys.epoch,
         sender_core_salt,
         sender_ext_salt,
         output_core_salt,

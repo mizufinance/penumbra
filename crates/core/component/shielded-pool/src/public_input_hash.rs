@@ -17,7 +17,7 @@ use crate::{
 pub const NOTE_RESHAPE_STATEMENT_BASE_FIELDS: usize = 7;
 pub const NOTE_RESHAPE_STATEMENT_FIELDS_PER_INPUT: usize = 3;
 pub const NOTE_RESHAPE_STATEMENT_FIELDS_PER_OUTPUT: usize = 2;
-pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 46;
+pub const TRANSFER_STATEMENT_BASE_FIELDS: usize = 47;
 pub const TRANSFER_STATEMENT_FIELDS_PER_INPUT: usize = 3;
 pub const TRANSFER_STATEMENT_FIELDS_PER_OUTPUT: usize = 2;
 pub const SHIELDED_WITHDRAWAL_STATEMENT_BASE_FIELDS: usize = 25;
@@ -380,6 +380,7 @@ pub fn transfer_statement_fields(
     fields.push(compliance.output_core_key_confirmation);
     fields.extend(compliance.master_wrappings);
     let metadata = &compliance.metadata;
+    fields.push(Fq::from(metadata.audit_epoch));
     metadata
         .validate()
         .map_err(|e| transfer_field_encoding_error(&format!("transfer_metadata: {e}")))?;

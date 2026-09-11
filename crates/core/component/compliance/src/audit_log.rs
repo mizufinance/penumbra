@@ -1177,9 +1177,9 @@ mod tests {
         let receiver = Address::dummy(&mut OsRng);
         let encrypted = encrypt_transfer(
             &mut OsRng,
-            &decaf377::Element::GENERATOR,
-            &decaf377::Element::GENERATOR,
-            &decaf377::Element::GENERATOR,
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
+            &crate::AuditKeys::test_keys(),
             &decaf377::Element::GENERATOR,
             &receiver,
             &sender,
@@ -1199,6 +1199,7 @@ mod tests {
             Fq::from(3u64),
             Fq::from(4u64),
             5,
+            1,
             Fq::from(11u64),
             Fq::from(13u64),
             Fq::from(12u64),
@@ -1229,6 +1230,7 @@ mod tests {
             Fq::from(3u64),
             Fq::from(4u64),
             5,
+            1,
             Fq::from(11u64),
             Fq::from(13u64),
             Fq::from(99u64),

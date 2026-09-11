@@ -1679,3 +1679,44 @@ func transferMetadataMutations() []transferMutation {
 		}},
 	}
 }
+
+func TestTransferCircuitRejectsAuditKeySubstitution(t *testing.T) {
+	for _, owner := range []string{"sender", "receiver", "general"} {
+		for _, field := range []string{"amount", "sender", "receiver", "epoch"} {
+			t.Run(owner+"/"+field, func(t *testing.T) {
+				_, c := loadTransferAssignment(t)
+				keys := &c.Sender.AuditKeys
+				if owner == "receiver" {
+					keys = &c.ReceiverOutput.Recipient.AuditKeys
+				}
+				if owner == "general" {
+					keys = &c.Asset.Leaf.AuditKeys
+				}
+				switch field {
+				case "amount":
+					keys.Amount = keys.Sender
+				case "sender":
+					keys.Sender = keys.Receiver
+				case "receiver":
+					keys.Receiver = keys.Amount
+				case "epoch":
+					keys.Epoch = 2
+				}
+				if err := test.IsSolved(circuits.NewTransferCircuit(), c, ecc.BLS12_377.ScalarField()); err == nil {
+					t.Fatal("accepted substituted registered audit key")
+				}
+			})
+		}
+	}
+	for _, stale := range []bool{false, true} {
+		t.Run(fmt.Sprintf("public_epoch/stale_%t", stale), func(t *testing.T) {
+			assertTransferMutationRejected(t, transferMutation{
+				preserveStaleStatement: stale,
+				mutate: func(t *testing.T, w *abi.TransferWitnessBinary, c *circuits.TransferCircuit) {
+					w.Metadata.AuditEpoch = addFieldElementBytes(t, w.Metadata.AuditEpoch, big.NewInt(1))
+					c.Compliance.Metadata.AuditEpoch = primitives.LittleEndianBytesToBigInt(w.Metadata.AuditEpoch[:]).String()
+				},
+			})
+		})
+	}
+}

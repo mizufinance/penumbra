@@ -13,6 +13,7 @@ import (
 )
 
 type indexedLeafCommitmentCircuit struct {
+ AuditKeys AuditKeysInputs
 	Value            frontend.Variable
 	NextIndex        frontend.Variable
 	NextValue        frontend.Variable
@@ -32,6 +33,7 @@ type indexedLeafCommitmentCircuit struct {
 
 func (c *indexedLeafCommitmentCircuit) Define(api frontend.API) error {
 	commitment, err := IndexedLeafCommitment(api, IndexedLeafInputs{
+ AuditKeys: c.AuditKeys,
 		Value:            c.Value,
 		NextIndex:        c.NextIndex,
 		NextValue:        c.NextValue,
@@ -76,7 +78,9 @@ func syntheticIndexedLeafInputs(t *testing.T) IndexedLeafInputs {
 		t.Fatalf("load prototype vectors: %v", err)
 	}
 
+ p := gnarkte.Point{X: primitives.MustBigInt(vectors.Decaf377CompanionCurve.GeneratorX), Y: primitives.MustBigInt(vectors.Decaf377CompanionCurve.GeneratorY)}
 	return IndexedLeafInputs{
+ AuditKeys: AuditKeysInputs{Epoch: uint64(1), Amount: p, Sender: p, Receiver: p},
 		Value:     big.NewInt(11),
 		NextIndex: uint64(7),
 		NextValue: big.NewInt(22),
@@ -125,6 +129,7 @@ func TestIndexedLeafCircuitMatchesNativeCommitment(t *testing.T) {
 	}
 
 	assignment := &indexedLeafCommitmentCircuit{
+ AuditKeys: inputs.AuditKeys,
 		Value:            inputs.Value,
 		NextIndex:        inputs.NextIndex,
 		NextValue:        inputs.NextValue,

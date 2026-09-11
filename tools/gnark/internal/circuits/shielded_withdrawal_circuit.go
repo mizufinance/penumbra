@@ -45,6 +45,7 @@ type ShieldedWithdrawalChangeCircuitFields struct {
 }
 
 type ShieldedWithdrawalSenderCircuitFields struct {
+	AuditKeys     AuditKeysInputs
 	DivGen        Point2D
 	Capk          Point2D
 	RnkDhPk       Point2D
@@ -376,6 +377,7 @@ func (c *ShieldedWithdrawalCircuit) verifySharedContext(
 	shared := shieldedWithdrawalSharedContext{
 		ak: gnarkte.Point{X: c.Auth.AK.X, Y: c.Auth.AK.Y},
 		indexedLeaf: IndexedLeafInputs{
+			AuditKeys:        c.Asset.Leaf.AuditKeys,
 			Value:            c.Asset.Leaf.Value,
 			NextIndex:        c.Asset.Leaf.NextIndex,
 			NextValue:        c.Asset.Leaf.NextValue,
@@ -517,6 +519,7 @@ func (c *ShieldedWithdrawalCircuit) verifySharedContext(
 		gnarkte.Point{X: c.Sender.RnkDhPk.X, Y: c.Sender.RnkDhPk.Y},
 		c.Sender.RnkCommitment,
 		c.Sender.Status,
+		c.Sender.AuditKeys,
 	)
 	if err != nil {
 		return shieldedWithdrawalSharedContext{}, err

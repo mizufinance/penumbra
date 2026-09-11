@@ -280,9 +280,9 @@ pub fn derive_transfer_salt(root: Fr, label: &[u8]) -> Fq {
 
 pub fn encrypt_transfer(
     mut rng: impl RngCore + CryptoRng,
-    ring_pk: &Element,
-    ack_sender: &Element,
-    ack_receiver: &Element,
+    general_keys: &crate::AuditKeys,
+    sender_keys: &crate::AuditKeys,
+    receiver_keys: &crate::AuditKeys,
     dk_pub: &Element,
     receiver_address: &Address,
     sender_address: &Address,
@@ -292,6 +292,13 @@ pub fn encrypt_transfer(
     sender_core_salt: Fq,
     output_core_salt: Fq,
 ) -> Result<TransferEncryptionResult> {
+    general_keys.validate()?;
+    sender_keys.validate()?;
+    receiver_keys.validate()?;
+    anyhow::ensure!(
+        general_keys.epoch == sender_keys.epoch && general_keys.epoch == receiver_keys.epoch,
+        "audit key epoch mismatch"
+    );
     let sender = PartyTierMaterial {
         core: TierSecretMaterial {
             seed: Fq::rand(&mut rng),
@@ -321,29 +328,28 @@ pub fn encrypt_transfer(
     let sender_core_shared = if is_flagged {
         *dk_pub * sender.core.r
     } else {
-        *ack_sender * sender.core.r
+        sender_keys.amount * sender.core.r
     };
     let sender_ext_shared = if is_flagged {
         *dk_pub * sender.ext.r
     } else {
-        *ack_sender * sender.ext.r
+        sender_keys.receiver * sender.ext.r
     };
     let output_core_shared = if is_flagged {
         *dk_pub * output.core.r
     } else {
-        *ack_receiver * output.core.r
+        receiver_keys.amount * output.core.r
     };
     let output_ext_shared = if is_flagged {
         *dk_pub * output.ext.r
     } else {
-        *ack_receiver * output.ext.r
+        receiver_keys.sender * output.ext.r
     };
 
     let sender_core_c2 = sender.core.seed + sender_core_shared.vartime_compress_to_field();
     let sender_ext_c2 = sender.ext.seed + sender_ext_shared.vartime_compress_to_field();
     let output_core_c2 = output.core.seed + output_core_shared.vartime_compress_to_field();
     let output_ext_c2 = output.ext.seed + output_ext_shared.vartime_compress_to_field();
-    let master_key = if is_flagged { dk_pub } else { ring_pk };
     let master_wrappings = [
         (
             crate::master_wrapping::MasterSelection::Amount,
@@ -362,7 +368,16 @@ pub fn encrypt_transfer(
         ),
     ]
     .map(|(selection, material, epk)| {
-        material.seed + selection.mask(&(*master_key * material.r), &epk)
+        let recipient = if is_flagged {
+            *dk_pub
+        } else {
+            match selection {
+                crate::master_wrapping::MasterSelection::Amount => general_keys.amount,
+                crate::master_wrapping::MasterSelection::Sender => general_keys.sender,
+                crate::master_wrapping::MasterSelection::Receiver => general_keys.receiver,
+            }
+        };
+        material.seed + selection.mask(&(recipient * material.r), &epk)
     });
     let sender_core_key_confirmation = transfer_key_confirmation(
         sender.core.seed,

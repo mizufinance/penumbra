@@ -39,6 +39,9 @@ impl serde::Serialize for AssetPolicy {
         if self.seizure_authority_vk.is_some() {
             len += 1;
         }
+        if !self.audit_keys.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.AssetPolicy", len)?;
         if !self.dk_pub.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -79,6 +82,11 @@ impl serde::Serialize for AssetPolicy {
         if let Some(v) = self.seizure_authority_vk.as_ref() {
             struct_ser.serialize_field("seizureAuthorityVk", v)?;
         }
+        if !self.audit_keys.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("auditKeys", pbjson::private::base64::encode(&self.audit_keys).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -109,6 +117,8 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
             "ibcOrigin",
             "seizure_authority_vk",
             "seizureAuthorityVk",
+            "audit_keys",
+            "auditKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -124,6 +134,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
             RegistrationAuthorityVk,
             IbcOrigin,
             SeizureAuthorityVk,
+            AuditKeys,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -157,6 +168,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                             "registrationAuthorityVk" | "registration_authority_vk" => Ok(GeneratedField::RegistrationAuthorityVk),
                             "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
                             "seizureAuthorityVk" | "seizure_authority_vk" => Ok(GeneratedField::SeizureAuthorityVk),
+                            "auditKeys" | "audit_keys" => Ok(GeneratedField::AuditKeys),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -187,6 +199,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                 let mut registration_authority_vk__ = None;
                 let mut ibc_origin__ = None;
                 let mut seizure_authority_vk__ = None;
+                let mut audit_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::DkPub => {
@@ -261,6 +274,14 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                             }
                             seizure_authority_vk__ = map_.next_value()?;
                         }
+                        GeneratedField::AuditKeys => {
+                            if audit_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("auditKeys"));
+                            }
+                            audit_keys__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -278,6 +299,7 @@ impl<'de> serde::Deserialize<'de> for AssetPolicy {
                     registration_authority_vk: registration_authority_vk__,
                     ibc_origin: ibc_origin__,
                     seizure_authority_vk: seizure_authority_vk__,
+                    audit_keys: audit_keys__.unwrap_or_default(),
                 })
             }
         }
@@ -464,6 +486,9 @@ impl serde::Serialize for AssetRegistrationGrantBody {
         if self.seizure_authority_vk.is_some() {
             len += 1;
         }
+        if !self.audit_keys.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.AssetRegistrationGrantBody", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -515,6 +540,11 @@ impl serde::Serialize for AssetRegistrationGrantBody {
         if let Some(v) = self.seizure_authority_vk.as_ref() {
             struct_ser.serialize_field("seizureAuthorityVk", v)?;
         }
+        if !self.audit_keys.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("auditKeys", pbjson::private::base64::encode(&self.audit_keys).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -551,6 +581,8 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             "ibcOrigin",
             "seizure_authority_vk",
             "seizureAuthorityVk",
+            "audit_keys",
+            "auditKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -569,6 +601,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
             ValidUntilUnix,
             IbcOrigin,
             SeizureAuthorityVk,
+            AuditKeys,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -605,6 +638,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                             "validUntilUnix" | "valid_until_unix" => Ok(GeneratedField::ValidUntilUnix),
                             "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
                             "seizureAuthorityVk" | "seizure_authority_vk" => Ok(GeneratedField::SeizureAuthorityVk),
+                            "auditKeys" | "audit_keys" => Ok(GeneratedField::AuditKeys),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -638,6 +672,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                 let mut valid_until_unix__ = None;
                 let mut ibc_origin__ = None;
                 let mut seizure_authority_vk__ = None;
+                let mut audit_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -732,6 +767,14 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                             }
                             seizure_authority_vk__ = map_.next_value()?;
                         }
+                        GeneratedField::AuditKeys => {
+                            if audit_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("auditKeys"));
+                            }
+                            audit_keys__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -752,6 +795,7 @@ impl<'de> serde::Deserialize<'de> for AssetRegistrationGrantBody {
                     valid_until_unix: valid_until_unix__.unwrap_or_default(),
                     ibc_origin: ibc_origin__,
                     seizure_authority_vk: seizure_authority_vk__,
+                    audit_keys: audit_keys__.unwrap_or_default(),
                 })
             }
         }
@@ -1621,6 +1665,9 @@ impl serde::Serialize for ComplianceLeaf {
         if self.frozen_since_height != 0 {
             len += 1;
         }
+        if !self.audit_keys.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.ComplianceLeaf", len)?;
         if let Some(v) = self.address.as_ref() {
             struct_ser.serialize_field("address", v)?;
@@ -1658,6 +1705,11 @@ impl serde::Serialize for ComplianceLeaf {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("frozenSinceHeight", ToString::to_string(&self.frozen_since_height).as_str())?;
         }
+        if !self.audit_keys.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("auditKeys", pbjson::private::base64::encode(&self.audit_keys).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1681,6 +1733,8 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
             "freezeGeneration",
             "frozen_since_height",
             "frozenSinceHeight",
+            "audit_keys",
+            "auditKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1693,6 +1747,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
             Status,
             FreezeGeneration,
             FrozenSinceHeight,
+            AuditKeys,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1723,6 +1778,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                             "status" => Ok(GeneratedField::Status),
                             "freezeGeneration" | "freeze_generation" => Ok(GeneratedField::FreezeGeneration),
                             "frozenSinceHeight" | "frozen_since_height" => Ok(GeneratedField::FrozenSinceHeight),
+                            "auditKeys" | "audit_keys" => Ok(GeneratedField::AuditKeys),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -1750,6 +1806,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                 let mut status__ = None;
                 let mut freeze_generation__ = None;
                 let mut frozen_since_height__ = None;
+                let mut audit_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Address => {
@@ -1810,6 +1867,14 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AuditKeys => {
+                            if audit_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("auditKeys"));
+                            }
+                            audit_keys__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -1824,6 +1889,7 @@ impl<'de> serde::Deserialize<'de> for ComplianceLeaf {
                     status: status__.unwrap_or_default(),
                     freeze_generation: freeze_generation__.unwrap_or_default(),
                     frozen_since_height: frozen_since_height__.unwrap_or_default(),
+                    audit_keys: audit_keys__.unwrap_or_default(),
                 })
             }
         }
@@ -4036,6 +4102,9 @@ impl serde::Serialize for IndexedLeafData {
         if !self.resource_hash.is_empty() {
             len += 1;
         }
+        if !self.audit_keys.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.IndexedLeafData", len)?;
         if !self.value.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -4092,6 +4161,11 @@ impl serde::Serialize for IndexedLeafData {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("resourceHash", pbjson::private::base64::encode(&self.resource_hash).as_str())?;
         }
+        if !self.audit_keys.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("auditKeys", pbjson::private::base64::encode(&self.audit_keys).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -4123,6 +4197,8 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             "permissionHash",
             "resource_hash",
             "resourceHash",
+            "audit_keys",
+            "auditKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4138,6 +4214,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
             PolicyIdHash,
             PermissionHash,
             ResourceHash,
+            AuditKeys,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4171,6 +4248,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                             "policyIdHash" | "policy_id_hash" => Ok(GeneratedField::PolicyIdHash),
                             "permissionHash" | "permission_hash" => Ok(GeneratedField::PermissionHash),
                             "resourceHash" | "resource_hash" => Ok(GeneratedField::ResourceHash),
+                            "auditKeys" | "audit_keys" => Ok(GeneratedField::AuditKeys),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4201,6 +4279,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                 let mut policy_id_hash__ = None;
                 let mut permission_hash__ = None;
                 let mut resource_hash__ = None;
+                let mut audit_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Value => {
@@ -4291,6 +4370,14 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::AuditKeys => {
+                            if audit_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("auditKeys"));
+                            }
+                            audit_keys__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4308,6 +4395,7 @@ impl<'de> serde::Deserialize<'de> for IndexedLeafData {
                     policy_id_hash: policy_id_hash__.unwrap_or_default(),
                     permission_hash: permission_hash__.unwrap_or_default(),
                     resource_hash: resource_hash__.unwrap_or_default(),
+                    audit_keys: audit_keys__.unwrap_or_default(),
                 })
             }
         }
@@ -4557,6 +4645,12 @@ impl serde::Serialize for MsgRegisterAsset {
         if self.seizure_authority_vk.is_some() {
             len += 1;
         }
+        if !self.audit_keys.is_empty() {
+            len += 1;
+        }
+        if self.audit_certificate.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.MsgRegisterAsset", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -4606,6 +4700,14 @@ impl serde::Serialize for MsgRegisterAsset {
         if let Some(v) = self.seizure_authority_vk.as_ref() {
             struct_ser.serialize_field("seizureAuthorityVk", v)?;
         }
+        if !self.audit_keys.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("auditKeys", pbjson::private::base64::encode(&self.audit_keys).as_str())?;
+        }
+        if let Some(v) = self.audit_certificate.as_ref() {
+            struct_ser.serialize_field("auditCertificate", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -4642,6 +4744,10 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             "ibcOrigin",
             "seizure_authority_vk",
             "seizureAuthorityVk",
+            "audit_keys",
+            "auditKeys",
+            "audit_certificate",
+            "auditCertificate",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4660,6 +4766,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
             AssetRegistrationGrant,
             IbcOrigin,
             SeizureAuthorityVk,
+            AuditKeys,
+            AuditCertificate,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -4696,6 +4804,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             "assetRegistrationGrant" | "asset_registration_grant" => Ok(GeneratedField::AssetRegistrationGrant),
                             "ibcOrigin" | "ibc_origin" => Ok(GeneratedField::IbcOrigin),
                             "seizureAuthorityVk" | "seizure_authority_vk" => Ok(GeneratedField::SeizureAuthorityVk),
+                            "auditKeys" | "audit_keys" => Ok(GeneratedField::AuditKeys),
+                            "auditCertificate" | "audit_certificate" => Ok(GeneratedField::AuditCertificate),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -4729,6 +4839,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                 let mut asset_registration_grant__ = None;
                 let mut ibc_origin__ = None;
                 let mut seizure_authority_vk__ = None;
+                let mut audit_keys__ = None;
+                let mut audit_certificate__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -4821,6 +4933,20 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                             }
                             seizure_authority_vk__ = map_.next_value()?;
                         }
+                        GeneratedField::AuditKeys => {
+                            if audit_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("auditKeys"));
+                            }
+                            audit_keys__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::AuditCertificate => {
+                            if audit_certificate__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("auditCertificate"));
+                            }
+                            audit_certificate__ = map_.next_value()?;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -4841,6 +4967,8 @@ impl<'de> serde::Deserialize<'de> for MsgRegisterAsset {
                     asset_registration_grant: asset_registration_grant__,
                     ibc_origin: ibc_origin__,
                     seizure_authority_vk: seizure_authority_vk__,
+                    audit_keys: audit_keys__.unwrap_or_default(),
+                    audit_certificate: audit_certificate__,
                 })
             }
         }
@@ -5015,6 +5143,9 @@ impl serde::Serialize for NativeAssetRegistration {
         if !self.resource.is_empty() {
             len += 1;
         }
+        if !self.audit_keys.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("shieldd.core.component.compliance.v1.NativeAssetRegistration", len)?;
         if let Some(v) = self.asset_id.as_ref() {
             struct_ser.serialize_field("assetId", v)?;
@@ -5050,6 +5181,11 @@ impl serde::Serialize for NativeAssetRegistration {
         if !self.resource.is_empty() {
             struct_ser.serialize_field("resource", &self.resource)?;
         }
+        if !self.audit_keys.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("auditKeys", pbjson::private::base64::encode(&self.audit_keys).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -5078,6 +5214,8 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
             "policyId",
             "permission",
             "resource",
+            "audit_keys",
+            "auditKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5092,6 +5230,7 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
             PolicyId,
             Permission,
             Resource,
+            AuditKeys,
             __SkipField__,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -5124,6 +5263,7 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                             "policyId" | "policy_id" => Ok(GeneratedField::PolicyId),
                             "permission" => Ok(GeneratedField::Permission),
                             "resource" => Ok(GeneratedField::Resource),
+                            "auditKeys" | "audit_keys" => Ok(GeneratedField::AuditKeys),
                             _ => Ok(GeneratedField::__SkipField__),
                         }
                     }
@@ -5153,6 +5293,7 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                 let mut policy_id__ = None;
                 let mut permission__ = None;
                 let mut resource__ = None;
+                let mut audit_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::AssetId => {
@@ -5219,6 +5360,14 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                             }
                             resource__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::AuditKeys => {
+                            if audit_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("auditKeys"));
+                            }
+                            audit_keys__ =
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::__SkipField__ => {
                             let _ = map_.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -5235,6 +5384,7 @@ impl<'de> serde::Deserialize<'de> for NativeAssetRegistration {
                     policy_id: policy_id__.unwrap_or_default(),
                     permission: permission__.unwrap_or_default(),
                     resource: resource__.unwrap_or_default(),
+                    audit_keys: audit_keys__.unwrap_or_default(),
                 })
             }
         }
