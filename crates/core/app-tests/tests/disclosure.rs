@@ -123,6 +123,26 @@ async fn accepted_disclosure_opening() -> Result<()> {
 }
 
 async fn run_disclosure(prove: bool) -> Result<()> {
+    if std::env::var_os("BANKD_DISCLOSURE_TEST_BIN").is_some() {
+        for name in ["BANKD_AUDIT_CLI", "DEFRA_TEST_BIN", "VERA_TEST_FIXTURE"] {
+            let path = std::env::var(name)
+                .with_context(|| format!("{name} required for Bankd workflow"))?;
+            ensure!(
+                std::path::Path::new(&path).is_file(),
+                "{name} does not name an existing file"
+            );
+        }
+    }
+    if prove {
+        for name in ["SHIELDD_DISCLOSURE_ARTIFACTS", "SHIELDD_DISCLOSURE_BACKEND"] {
+            let path =
+                std::env::var(name).with_context(|| format!("{name} required for proving"))?;
+            ensure!(
+                std::path::Path::new(&path).exists(),
+                "{name} does not exist"
+            );
+        }
+    }
     shieldd_sdk_shielded_pool::gnark::require_proof_test_runtime(
         shieldd_sdk_shielded_pool::gnark::ProofTestFamily::Transfer,
     )?;

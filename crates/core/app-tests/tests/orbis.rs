@@ -12,9 +12,11 @@ use shieldd_sdk_app::{
 };
 use shieldd_sdk_asset::{asset::REGISTRY, Value};
 use shieldd_sdk_compliance::{
-    genesis::NativeAssetRegistration,
-    structs::{OrbisCapabilityCertificate, UserRegistrationGrant, UserRegistrationGrantBody},
-    AuditKeys, ComplianceLeaf, DetectionKey, MsgRegisterUser,
+    structs::{
+        AssetRegistrationGrant, OrbisCapabilityCertificate, UserRegistrationGrant,
+        UserRegistrationGrantBody,
+    },
+    AuditKeys, ComplianceLeaf, DetectionKey, MsgRegisterAsset, MsgRegisterUser,
 };
 use shieldd_sdk_disclosure::{
     AuditAccess, AuditPolicy, AuditRegistration, AuditRegistrationRequest, AuditSelection,
@@ -118,21 +120,29 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
     let issuer = DetectionKey::new(Fr::from(19002u64));
     let denom = "live_orbis_asset";
     let asset = REGISTRY.parse_denom(denom).context("fixture asset")?.id();
-    let registration = NativeAssetRegistration {
+    let mut registration = MsgRegisterAsset {
+        audit_certificate: None,
+        asset_registration_grant: None,
+        daily_volume_limit: None,
+        allowed_ibc_routes: vec![],
+        ibc_origin: None,
         audit_keys: Some(keys(&general)?),
         asset_id: asset,
         is_regulated: true,
-        dk_pub: Some(issuer.public_key().vartime_compress().0),
+        dk_pub: Some(issuer.public_key()),
         registration_authority_vk: Some(authority_vk),
         seizure_authority_vk: Some(authority_vk),
-        ring_pk: Some(ring_pk.vartime_compress().0),
+        ring_pk: Some(ring_pk),
         ring_id: fixture.ring.clone(),
         policy_id: fixture.policy.clone(),
         permission: "read".into(),
         resource: "shieldd_audit".into(),
     };
     let mut content = genesis::Content::default().with_chain_id(TEST_CHAIN_ID.into());
-    content.compliance_content.native_assets.push(registration);
+    content
+        .compliance_content
+        .compliance_registrar_vk
+        .push(authority_vk);
     let storage = common::new_storage().await?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -155,6 +165,50 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
     let mut client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
         .await?;
+    let intent = |actions| TransactionIntent {
+        actions,
+        nullifier_window: None,
+        memo: None,
+        fee_funding: None,
+        transaction_parameters: TransactionParameters {
+            chain_id: TEST_CHAIN_ID.into(),
+            ..Default::default()
+        },
+    };
+    let body = registration.registration_grant_body(now + 3600);
+    registration.asset_registration_grant = Some(AssetRegistrationGrant {
+        registrar_vk: authority_vk,
+        signature: authority.sign(OsRng, &body.signing_bytes()),
+        body,
+    });
+    let request = AuditRegistrationRequest {
+        version: 1,
+        chain_id: TEST_CHAIN_ID.into(),
+        registration: AuditRegistration::General {
+            action: registration.clone(),
+        },
+    };
+    let result = helper(&fixture_path, json!({"kind":"certify", "registration":request,
+        "evaluations": general.iter().map(|record| record.evaluations.clone()).collect::<Vec<_>>()})).await?;
+    let signature: Vec<u8> = serde_json::from_value(result["certificate"].clone())?;
+    ensure!(signature.len() == 64, "general certificate signature size");
+    registration.audit_certificate = Some(OrbisCapabilityCertificate::try_from(
+        cpb::OrbisCapabilityCertificate {
+            chain_id: TEST_CHAIN_ID.into(),
+            r_point: signature[..32].to_vec(),
+            response: signature[32..].to_vec(),
+        },
+    )?);
+    let plan = client
+        .complete_intent(
+            intent(vec![ActionIntent::Complete(
+                ActionPlan::ComplianceRegisterAsset(registration),
+            )]),
+            storage.latest_snapshot(),
+        )
+        .await?;
+    let transaction = client.witness_auth_build(&plan).await?;
+    host.execute(vec![transaction.encode_to_vec()]).await?;
     let mut actions = vec![];
     let mut person_keys = vec![];
     for (index, address) in [test_keys::ADDRESS_0.clone(), test_keys::ADDRESS_1.clone()]
@@ -222,16 +276,6 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
         )));
         person_keys.push(records);
     }
-    let intent = |actions| TransactionIntent {
-        actions,
-        nullifier_window: None,
-        memo: None,
-        fee_funding: None,
-        transaction_parameters: TransactionParameters {
-            chain_id: TEST_CHAIN_ID.into(),
-            ..Default::default()
-        },
-    };
     let plan = client
         .complete_intent(intent(actions), storage.latest_snapshot())
         .await?;
@@ -239,9 +283,9 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
     host.execute(vec![registrations.encode_to_vec()]).await?;
     host.execution
         .begin_block(HostBlock {
-            height: 3,
+            height: 4,
             time: time
-                .checked_add(std::time::Duration::from_secs(2))
+                .checked_add(std::time::Duration::from_secs(3))
                 .context("time overflow")?,
         })
         .await?;
@@ -251,14 +295,14 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
             amount: "42".into(),
             recipient: test_keys::ADDRESS_0.to_string(),
             source: Some(HostSource {
-                height: 3,
+                height: 4,
                 tx_hash: vec![19; 32],
                 tx_index: 0,
                 msg_index: 0,
             }),
         })
         .await?;
-    host.execution.end_block(3).await?;
+    host.execution.end_block(4).await?;
     host.execution.commit().await?;
     client = MockClient::new(test_keys::SPEND_KEY.clone())
         .with_sync_to_storage(&storage)
@@ -360,7 +404,7 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
     let transaction = client.witness_auth_build(&plan).await?;
     host.execute_block(
         HostBlock {
-            height: 4,
+            height: 5,
             time: time
                 .checked_add(std::time::Duration::from_secs(3))
                 .context("time overflow")?,
@@ -368,7 +412,7 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
         vec![transaction.encode_to_vec()],
     )
     .await?;
-    let accepted = storage.latest_snapshot().transactions_by_height(4).await?;
+    let accepted = storage.latest_snapshot().transactions_by_height(5).await?;
     ensure!(
         accepted.transactions.len() == 1,
         "transaction acceptance missing"
@@ -383,7 +427,7 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
         version: 2,
         chain_id: TEST_CHAIN_ID.into(),
         reference: OutputRef {
-            height: 4,
+            height: 5,
             transaction_id: transaction.id().to_string(),
             action: shieldd_sdk_disclosure::ActionRef::Body(0),
             output: 0,
@@ -448,7 +492,7 @@ async fn run_audit(issuer_only: bool) -> Result<()> {
             IssuerDisclosureKind, IssuerRequest,
         };
         let block = AcceptedBlock {
-            height: 4,
+            height: 5,
             transactions: vec![transaction.clone()],
         };
         let mut packages = vec![];
