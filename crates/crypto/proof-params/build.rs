@@ -75,6 +75,17 @@ fn main() {
         }
     }
 
+    std::fs::write(
+        PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"))
+            .join("proof_artifact_provenance.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "approved": all_approved,
+            "debug_assertions": std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some(),
+        }))
+        .expect("serialize proof artifact provenance"),
+    )
+    .expect("write proof artifact provenance");
+
     if all_approved {
         println!("cargo:rustc-cfg=approved_proof_artifacts");
     }
