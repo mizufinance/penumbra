@@ -17,6 +17,7 @@ demo = ["shieldd-sdk-keys/demo"]
 ledger = ["dep:shieldd-sdk-custody-ledger-usb"]
 
 [dependencies]
+zeroize = "1"
 shieldd-sdk-disclosure = { workspace = true, features = ["proof"], optional = true }
 shieldd-sdk-view = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }

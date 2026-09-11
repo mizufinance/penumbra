@@ -34,6 +34,19 @@ pub enum DisclosureCmd {
         #[clap(long)]
         node: String,
     },
+    /// Create issuer evidence from private JSON stdin; never pass the issuer secret as an argument.
+    IssuerCreate {
+        #[clap(long)]
+        node: String,
+        #[clap(long)]
+        output: Utf8PathBuf,
+    },
+    /// Verify issuer evidence against accepted ciphertext and registered issuer policy.
+    IssuerVerify {
+        package: Utf8PathBuf,
+        #[clap(long)]
+        node: String,
+    },
     /// Validate a request without loading wallet or custody configuration.
     ValidateRequest { request: Utf8PathBuf },
     /// Export explicitly selected claims using a local background prover.
@@ -232,54 +245,132 @@ async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk:
     sdk::confirm_acceptance(&package.statement, &chain_id, &blocks)
 }
 
+async fn asset_policy(
+    node: &str,
+    asset: shieldd_sdk_asset::asset::Id,
+) -> Result<shieldd_sdk_compliance::AssetPolicy> {
+    use shieldd_sdk_proto::core::component::compliance::v1 as cpb;
+    let channel = tonic::transport::Endpoint::from_shared(node.to_owned())?
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .connect()
+        .await?;
+    let mut client =
+        tonic::client::Grpc::new(channel).max_decoding_message_size(sdk::MAX_DOCUMENT_BYTES);
+    client.ready().await?;
+    let response: tonic::Response<cpb::ComplianceAssetStatusResponse> = client
+        .unary(
+            tonic::Request::new(cpb::ComplianceAssetStatusRequest {
+                asset_id: Some(asset.into()),
+            }),
+            tonic::codegen::http::uri::PathAndQuery::from_static(
+                "/mizufinance.shieldd.v1.Query/ComplianceAssetStatus",
+            ),
+            tonic::codec::ProstCodec::default(),
+        )
+        .await?;
+    let response = response.into_inner();
+    ensure!(
+        response.is_registered && response.is_regulated,
+        "registered regulated asset unavailable"
+    );
+    let asset_id: shieldd_sdk_asset::asset::Id = response
+        .asset_id
+        .context("node omitted asset identity")?
+        .try_into()?;
+    ensure!(asset_id == asset, "node returned wrong asset identity");
+    response
+        .asset_policy
+        .context("node omitted asset policy")?
+        .try_into()
+}
+
 impl DisclosureCmd {
     pub async fn exec(&self, home: &Utf8Path) -> Result<()> {
         match self {
+            Self::IssuerCreate { node, output } => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct PrivateRequest {
+                    request: sdk::IssuerRequest,
+                    issuer_secret: [u8; 32],
+                }
+                let bytes = zeroize::Zeroizing::new(read_bounded(
+                    Utf8Path::new("-"),
+                    sdk::MAX_DOCUMENT_BYTES,
+                )?);
+                let mut request: PrivateRequest = serde_json::from_slice(&bytes)?;
+                let secret = zeroize::Zeroizing::new(request.issuer_secret);
+                use zeroize::Zeroize;
+                request.issuer_secret.zeroize();
+                let mut key = shieldd_sdk_compliance::DetectionKey::new(
+                    decaf377::Fr::from_bytes_checked(&secret)
+                        .map_err(|_| anyhow::anyhow!("invalid issuer secret"))?,
+                );
+                let result = async {
+                    let asset: shieldd_sdk_asset::asset::Id = request.request.asset.parse()?;
+                    let policy = asset_policy(node, asset).await?;
+                    ensure!(key.public_key() == policy.params.dk_pub, "issuer key does not match registered asset");
+                    let (chain, blocks) = accepted_blocks(node, [request.request.selection.reference.height].into_iter().collect()).await?;
+                    let block = blocks.first().context("accepted block unavailable")?;
+                    let accepted = sdk::accepted_audit_ciphertext(request.request.selection.clone(), &chain, block)?;
+                    eprintln!("Issuer evidence shares the selected value plus asset, flagged status, detection salt, and amount decryption access.");
+                    let package = sdk::prepare_issuer_disclosure(rand_core::OsRng, &accepted, request.request, &key)?;
+                    let preview = sdk::verify_issuer_disclosure(&package, &chain, block, asset, policy.params.dk_pub)?;
+                    eprintln!("{}", serde_json::to_string_pretty(&preview)?);
+                    publish(output, &serde_json::to_vec(&package)?)
+                }.await;
+                key.0.zeroize();
+                result?;
+            }
+            Self::IssuerVerify { package, node } => {
+                let parsed = serde_json::from_slice::<sdk::IssuerDisclosure>(&read_bounded(
+                    package,
+                    sdk::MAX_DOCUMENT_BYTES,
+                )?);
+                let package = match parsed {
+                    Ok(package) if package.version == 1 => package,
+                    _ => {
+                        println!(r#"{{"status":"rejected"}}"#);
+                        anyhow::bail!("invalid issuer disclosure");
+                    }
+                };
+                let asset: shieldd_sdk_asset::asset::Id = match package.request.asset.parse() {
+                    Ok(asset) => asset,
+                    Err(_) => {
+                        println!(r#"{{"status":"rejected"}}"#);
+                        anyhow::bail!("invalid issuer asset");
+                    }
+                };
+                let policy = asset_policy(node, asset).await?;
+                let (chain, blocks) = accepted_blocks(
+                    node,
+                    [package.request.selection.reference.height]
+                        .into_iter()
+                        .collect(),
+                )
+                .await?;
+                match sdk::verify_issuer_disclosure(
+                    &package,
+                    &chain,
+                    blocks.first().context("accepted block unavailable")?,
+                    asset,
+                    policy.params.dk_pub,
+                ) {
+                    Ok(facts) => println!("{}", serde_json::to_string(&facts)?),
+                    Err(error) => {
+                        println!(r#"{{"status":"rejected"}}"#);
+                        return Err(error);
+                    }
+                }
+            }
             Self::AuditRegistration { request, node } => {
                 let request: sdk::AuditRegistrationRequest =
                     serde_json::from_slice(&read_bounded(request, sdk::MAX_DOCUMENT_BYTES)?)?;
                 let (chain, _) = accepted_blocks(node, BTreeSet::new()).await?;
                 let policy = match &request.registration {
                     sdk::AuditRegistration::Person { action } => {
-                        use shieldd_sdk_proto::core::component::compliance::v1 as cpb;
-                        let channel = tonic::transport::Endpoint::from_shared(node.clone())?
-                            .connect_timeout(std::time::Duration::from_secs(10))
-                            .timeout(std::time::Duration::from_secs(30))
-                            .connect()
-                            .await?;
-                        let mut client = tonic::client::Grpc::new(channel)
-                            .max_decoding_message_size(sdk::MAX_DOCUMENT_BYTES);
-                        client.ready().await?;
-                        let response: tonic::Response<cpb::ComplianceAssetStatusResponse> = client
-                            .unary(
-                                tonic::Request::new(cpb::ComplianceAssetStatusRequest {
-                                    asset_id: Some(action.leaf.asset_id.into()),
-                                }),
-                                tonic::codegen::http::uri::PathAndQuery::from_static(
-                                    "/mizufinance.shieldd.v1.Query/ComplianceAssetStatus",
-                                ),
-                                tonic::codec::ProstCodec::default(),
-                            )
-                            .await?;
-                        let response = response.into_inner();
-                        ensure!(
-                            response.is_registered && response.is_regulated,
-                            "registered regulated asset unavailable"
-                        );
-                        let asset_id: shieldd_sdk_asset::asset::Id = response
-                            .asset_id
-                            .context("node omitted asset identity")?
-                            .try_into()?;
-                        ensure!(
-                            asset_id == action.leaf.asset_id,
-                            "node returned wrong asset identity"
-                        );
-                        Some(
-                            response
-                                .asset_policy
-                                .context("node omitted asset policy")?
-                                .try_into()?,
-                        )
+                        Some(asset_policy(node, action.leaf.asset_id).await?)
                     }
                     sdk::AuditRegistration::General { .. } => None,
                 };
@@ -346,14 +437,21 @@ impl DisclosureCmd {
                 println!("{}", serde_json::to_string(&accepted)?);
             }
             Self::ValidateRequest { request } => {
-                let request: sdk::DisclosureRequest =
-                    serde_json::from_slice(&read_bounded(request, sdk::MAX_DOCUMENT_BYTES)?)?;
-                sdk::validate_request(&request)?;
-                println!("{}", serde_json::to_string(&request)?);
+                let bytes = read_bounded(request, sdk::MAX_DOCUMENT_BYTES)?;
+                let kind: serde_json::Value = serde_json::from_slice(&bytes)?;
+                if kind.get("kind").and_then(|k| k.as_str()) == Some("issuer") {
+                    let request: sdk::IssuerRequest = serde_json::from_slice(&bytes)?;
+                    sdk::validate_issuer_request(&request)?;
+                    println!("{}", serde_json::to_string(&request)?);
+                } else {
+                    let request: sdk::DisclosureRequest = serde_json::from_slice(&bytes)?;
+                    sdk::validate_request(&request)?;
+                    println!("{}", serde_json::to_string(&request)?);
+                }
             }
             Self::Capabilities => println!(
                 "{}",
-                serde_json::json!({"protocol":1,"package_version":sdk::VERSION,"audit_ciphertext_version":2,"audit_registration_version":1,"circuit":sdk::CIRCUIT_ID,"development_artifacts":cfg!(all(feature="development-disclosure-artifacts",debug_assertions))})
+                serde_json::json!({"protocol":1,"package_version":sdk::VERSION,"audit_ciphertext_version":2,"audit_registration_version":1,"issuer_disclosure_version":1,"circuit":sdk::CIRCUIT_ID,"development_artifacts":cfg!(all(feature="development-disclosure-artifacts",debug_assertions))})
             ),
             Self::Inspect { package } => {
                 let package = sdk::decode_package(&read_bounded(package, sdk::MAX_PACKAGE_BYTES)?)?;

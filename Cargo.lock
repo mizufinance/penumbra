@@ -4469,6 +4469,7 @@ dependencies = [
  "tonic 0.12.3",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "zeroize",
 ]
 
 [[package]]

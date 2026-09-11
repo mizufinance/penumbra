@@ -143,7 +143,7 @@ one, eight and 32 selected outputs, revealed fields, true/false predicates and
 public-statement mutations. Run it with `GOMAXPROCS=1 RAYON_NUM_THREADS=1` when
 using the one-worker resource bound.
 
-The release app tests `accepted_disclosure_opening` and
+The app tests `accepted_disclosure_opening` and
 `export_import_between_wallet_directories` require a payment proving runtime.
 Set `SHIELDD_GNARK_TRANSFER_LIB` to the library built from `tools/gnark/cmd/transferlib`
 and `SHIELDD_GNARK_TRANSFER_ARTIFACT_DIR` to `tools/gnark/artifacts/transfer`.
@@ -172,3 +172,28 @@ also include public transaction material and requests. The three-proof suite
 reached 1,052,360,704 bytes maximum RSS with zero swaps. The fixed circuit has
 approximately constant proving cost across these batch sizes; these measurements
 do not establish production setup approval or query completeness.
+
+## Issuer submissions
+
+`pcli disclosure issuer-create --node URL --output issuer.json` reads private JSON
+from stdin: `{"request": ISSUER_REQUEST, "issuer_secret": [32 bytes]}`. The key
+must match the independently fetched registered asset policy. The output is
+published atomically after checking both decryption proofs. The secret stays on
+the issuer's computer.
+
+An issuer request has `kind: "issuer"`, `version: 1`, optional `recipient` and
+`challenge`, canonical `asset`, and the same `selection` used by general audits.
+Its selection chooses amount, sender components, or receiver components. Both
+DLEQ proofs bind the complete typed request, including its audience and challenge.
+The issuer request can fulfill a Bankd request or accompany an allowed unsolicited
+submission. It proves control of the issuer decryption key, not legal identity.
+
+`pcli disclosure issuer-verify issuer.json --node URL` checks the accepted
+transaction, registered issuer key, detection proof, flagged bit, and selected
+field proof before returning facts. Current-policy key lookup fails closed after
+a key change; historical issuer-key lookup remains required for those records.
+
+Evidence also grants asset/flag/salt detection access and amount decryption access,
+because detection reuses sender CORE's ephemeral key. This capability is reported
+in the preview and verified result. Address output contains components, never an
+asserted canonical address. Issuer predicate proofs are not supported.

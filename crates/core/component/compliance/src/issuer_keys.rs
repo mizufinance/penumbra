@@ -104,6 +104,46 @@ impl MasterComplianceKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DetectionKey(pub Fr);
 
+/// Decode detection data using a shared point authenticated by issuer DLEQ evidence.
+pub fn decrypt_detection(
+    shared_secret: &Element,
+    epk: &Element,
+    detection_ciphertext: &[u8; DETECTION_TIER_BYTES],
+    expected_asset_id: &asset::Id,
+) -> anyhow::Result<(asset::Id, bool, Fq)> {
+    anyhow::ensure!(
+        !shared_secret.is_identity() && !epk.is_identity(),
+        "identity detection point"
+    );
+    let shared_secret_fq = shared_secret.vartime_compress_to_field();
+    let epk_fq = epk.vartime_compress_to_field();
+    let seed = poseidon377::hash_2(&*DETECTION_TIER_DOMAIN, (shared_secret_fq, epk_fq));
+
+    // Detection tier layout:
+    // [asset_id, salt, is_flagged, reserved_zero]
+    let ct_fq = Fq::from_le_bytes_mod_order(&detection_ciphertext[..32]);
+    let keystream = compliance_stream_block(seed, 0);
+    let decrypted_asset_id = ct_fq - keystream;
+    anyhow::ensure!(
+        decrypted_asset_id == expected_asset_id.0,
+        "detection tier does not match expected asset"
+    );
+
+    let ct_salt_fq = Fq::from_le_bytes_mod_order(&detection_ciphertext[32..64]);
+    let keystream_salt = compliance_stream_block(seed, 1);
+    let salt = ct_salt_fq - keystream_salt;
+
+    let ct_flag = Fq::from_le_bytes_mod_order(&detection_ciphertext[64..96]);
+    let is_flagged = detection_flag_from_fq(ct_flag - compliance_stream_block(seed, 2))?;
+    let ct_reserved = Fq::from_le_bytes_mod_order(&detection_ciphertext[96..128]);
+    anyhow::ensure!(
+        ct_reserved - compliance_stream_block(seed, 3) == Fq::from(0u64),
+        "detection reserved word is nonzero"
+    );
+
+    Ok((*expected_asset_id, is_flagged, salt))
+}
+
 impl DetectionKey {
     /// Create a new detection key from a scalar.
     pub fn new(scalar: Fr) -> Self {
@@ -177,39 +217,12 @@ impl DetectionKey {
         detection_ciphertext: &[u8; DETECTION_TIER_BYTES],
         expected_asset_id: &asset::Id,
     ) -> anyhow::Result<(asset::Id, bool, Fq)> {
-        // 1. Compute the shared secret from the serialized detection EPK.
-        let shared_secret = *epk * self.0;
-
-        // 2. Derive Poseidon stream cipher seed
-        let shared_secret_fq = shared_secret.vartime_compress_to_field();
-        let epk_fq = epk.vartime_compress_to_field();
-        let seed = poseidon377::hash_2(&*DETECTION_TIER_DOMAIN, (shared_secret_fq, epk_fq));
-
-        // 3. Decrypt via Fq subtraction: pt = ct - keystream
-        // Detection tier layout:
-        // [asset_id, salt, is_flagged, reserved_zero]
-        let ct_fq = Fq::from_le_bytes_mod_order(&detection_ciphertext[..32]);
-        let keystream = compliance_stream_block(seed, 0);
-        let decrypted_asset_id = ct_fq - keystream;
-        anyhow::ensure!(
-            decrypted_asset_id == expected_asset_id.0,
-            "detection tier does not match expected asset"
-        );
-
-        // 3b. Decrypt salt (second Fq element, counter=1)
-        let ct_salt_fq = Fq::from_le_bytes_mod_order(&detection_ciphertext[32..64]);
-        let keystream_salt = compliance_stream_block(seed, 1);
-        let salt = ct_salt_fq - keystream_salt;
-
-        let ct_flag = Fq::from_le_bytes_mod_order(&detection_ciphertext[64..96]);
-        let is_flagged = detection_flag_from_fq(ct_flag - compliance_stream_block(seed, 2))?;
-        let ct_reserved = Fq::from_le_bytes_mod_order(&detection_ciphertext[96..128]);
-        anyhow::ensure!(
-            ct_reserved - compliance_stream_block(seed, 3) == Fq::from(0u64),
-            "detection reserved word is nonzero"
-        );
-
-        Ok((*expected_asset_id, is_flagged, salt))
+        decrypt_detection(
+            &(*epk * self.0),
+            epk,
+            detection_ciphertext,
+            expected_asset_id,
+        )
     }
 
     /// Encrypt a detection tier for tests of issuer-side decoding.

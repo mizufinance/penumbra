@@ -13,3 +13,5 @@ pub use types::*;
 mod proof;
 #[cfg(feature = "proof")]
 pub use proof::*;
+mod issuer;
+pub use issuer::*;

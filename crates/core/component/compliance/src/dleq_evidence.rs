@@ -27,10 +27,31 @@ static ISSUER_DLEQ_DOMAIN: Lazy<decaf377::Fq> =
 impl IssuerDhEvidence {
     /// Produce verifiable decryption access for one ciphertext without exporting DK.
     pub fn prove(
+        rng: impl RngCore + CryptoRng,
+        dk: &crate::DetectionKey,
+        asset_id: [u8; 32],
+        ciphertext_epk: Element,
+    ) -> Result<Self> {
+        Self::prove_inner(rng, dk, asset_id, ciphertext_epk, None)
+    }
+
+    /// Bind fresh issuer decryption evidence to a canonical disclosure request digest.
+    pub fn prove_bound(
+        rng: impl RngCore + CryptoRng,
+        dk: &crate::DetectionKey,
+        asset_id: [u8; 32],
+        ciphertext_epk: Element,
+        request: &[u8; 32],
+    ) -> Result<Self> {
+        Self::prove_inner(rng, dk, asset_id, ciphertext_epk, Some(request))
+    }
+
+    fn prove_inner(
         mut rng: impl RngCore + CryptoRng,
         dk: &crate::DetectionKey,
         asset_id: [u8; 32],
         ciphertext_epk: Element,
+        request: Option<&[u8; 32]>,
     ) -> Result<Self> {
         decaf377::Fq::from_bytes_checked(&asset_id)
             .map_err(|_| anyhow::anyhow!("issuer evidence asset ID is not canonical"))?;
@@ -43,7 +64,7 @@ impl IssuerDhEvidence {
             }
         };
         let mut evidence = Self {
-            version: 1,
+            version: if request.is_some() { 2 } else { 1 },
             asset_id,
             ciphertext_epk,
             issuer_dk_pub: dk.public_key(),
@@ -54,7 +75,7 @@ impl IssuerDhEvidence {
                 response: Fr::from(0u64),
             },
         };
-        evidence.proof.response = nonce + issuer_challenge(&evidence) * dk.0;
+        evidence.proof.response = nonce + evidence_challenge(&evidence, request) * dk.0;
         Ok(evidence)
     }
 
@@ -80,8 +101,32 @@ impl IssuerDhEvidence {
         self.verify()
     }
 
+    /// Expected fields and request digest come from the accepted transaction and requested disclosure.
+    pub fn verify_bound_for(
+        &self,
+        asset_id: [u8; 32],
+        issuer_dk_pub: Element,
+        ciphertext_epk: Element,
+        request: &[u8; 32],
+    ) -> Result<Element> {
+        ensure!(
+            self.asset_id == asset_id
+                && self.issuer_dk_pub == issuer_dk_pub
+                && self.ciphertext_epk == ciphertext_epk,
+            "issuer evidence statement mismatch"
+        );
+        self.verify_inner(Some(request))
+    }
+
     pub fn verify(&self) -> Result<Element> {
-        ensure!(self.version == 1, "unsupported issuer DH evidence version");
+        self.verify_inner(None)
+    }
+
+    fn verify_inner(&self, request: Option<&[u8; 32]>) -> Result<Element> {
+        ensure!(
+            self.version == if request.is_some() { 2 } else { 1 },
+            "unsupported issuer DH evidence version"
+        );
         decaf377::Fq::from_bytes_checked(&self.asset_id)
             .map_err(|_| anyhow::anyhow!("issuer evidence asset ID is not canonical"))?;
         ensure_nonidentity("issuer ciphertext_epk", self.ciphertext_epk)?;
@@ -95,7 +140,7 @@ impl IssuerDhEvidence {
             self.issuer_dk_pub,
             self.shared_point,
             &self.proof,
-            issuer_challenge(self),
+            evidence_challenge(self, request),
         )?;
         Ok(self.shared_point)
     }
@@ -125,6 +170,19 @@ pub fn verify_dleq(
 fn ensure_nonidentity(label: &str, point: Element) -> Result<()> {
     ensure!(!point.is_identity(), "{label} must not be identity");
     Ok(())
+}
+
+fn evidence_challenge(evidence: &IssuerDhEvidence, request: Option<&[u8; 32]>) -> Fr {
+    let base = issuer_challenge(evidence);
+    let Some(request) = request else { return base };
+    let domain = decaf377::Fq::from_le_bytes_mod_order(b"shieldd.issuer.request.dleq.v1\0");
+    fq_to_challenge_scalar(poseidon377::hash_2(
+        &domain,
+        (
+            decaf377::Fq::from_le_bytes_mod_order(&base.to_bytes()),
+            decaf377::Fq::from_le_bytes_mod_order(request),
+        ),
+    ))
 }
 
 fn issuer_challenge(evidence: &IssuerDhEvidence) -> Fr {
