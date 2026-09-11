@@ -88,6 +88,16 @@ async fn helper(fixture: &str, request: Json) -> Result<Json> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires five live Orbis nodes, Vera, initialized LaKey and real Transfer proving"]
 async fn accepted_transaction_through_live_orbis() -> Result<()> {
+    run_audit(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires live certified registrations and accepted issuer disclosure"]
+async fn accepted_issuer_disclosure() -> Result<()> {
+    run_audit(true).await
+}
+
+async fn run_audit(issuer_only: bool) -> Result<()> {
     shieldd_sdk_shielded_pool::gnark::require_proof_test_runtime(
         shieldd_sdk_shielded_pool::gnark::ProofTestFamily::Transfer,
     )?;
@@ -299,19 +309,54 @@ async fn accepted_transaction_through_live_orbis() -> Result<()> {
             >= 42,
         "fixture exceeds private volume limit"
     );
-    transfer.volume_accumulator = shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::origin(
-        shieldd_sdk_shielded_pool::VolumeAccumulatorState {
-            subject: shieldd_sdk_shielded_pool::VolumeAccumulatorState::subject(
-                &test_keys::ADDRESS_0,
-                asset,
-            ),
-            day_start: shieldd_sdk_shielded_pool::select_accumulator_day(
-                transfer.compliance.timestamp,
-            ),
-            undisclosed_volume: 42,
-            blinding: Fq::rand(&mut OsRng),
-        },
-    );
+    if !issuer_only {
+        transfer.volume_accumulator = shieldd_sdk_shielded_pool::VolumeAccumulatorPlan::origin(
+            shieldd_sdk_shielded_pool::VolumeAccumulatorState {
+                subject: shieldd_sdk_shielded_pool::VolumeAccumulatorState::subject(
+                    &test_keys::ADDRESS_0,
+                    asset,
+                ),
+                day_start: shieldd_sdk_shielded_pool::select_accumulator_day(
+                    transfer.compliance.timestamp,
+                ),
+                undisclosed_volume: 42,
+                blinding: Fq::rand(&mut OsRng),
+            },
+        );
+    }
+    if let Ok(script) = std::env::var("BANKD_BROWSER_WITNESS_TEST") {
+        let witness = client.witness_plan(&plan)?;
+        let ActionPlan::Transfer(transfer) = &plan.actions[0] else {
+            unreachable!()
+        };
+        let paths = transfer
+            .spends
+            .iter()
+            .map(|spend| {
+                witness
+                    .state_commitment_proofs
+                    .get(&spend.note.commit())
+                    .cloned()
+                    .context("missing spend proof")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expected = transfer.transfer_witness_payload(
+            &client.fvk,
+            paths,
+            witness.anchor,
+            plan.recent_position_floor()?,
+        )?;
+        let input = json!({"plan":plan.encode_to_vec(),"action":plan.actions[0].encode_to_vec(),
+            "fvk":client.fvk.encode_to_vec(),"witness":witness.encode_to_vec(),"expected":expected});
+        let mut private = tempfile::NamedTempFile::new_in(&fixture.root)?;
+        std::io::Write::write_all(&mut private, &serde_json::to_vec(&input)?)?;
+        let status = tokio::process::Command::new("node")
+            .arg(script)
+            .arg(private.path())
+            .status()
+            .await?;
+        ensure!(status.success(), "browser/native Transfer witness mismatch");
+    }
     let transaction = client.witness_auth_build(&plan).await?;
     host.execute_block(
         HostBlock {
@@ -396,6 +441,33 @@ async fn accepted_transaction_through_live_orbis() -> Result<()> {
     )?;
     let package = fixture.root.join("accepted-selections.json");
     std::fs::write(&package, serde_json::to_vec(&selections)?)?;
+    let issuer_file = fixture.root.join("accepted-issuer.json");
+    if issuer_only {
+        use shieldd_sdk_disclosure::{
+            accepted_audit_ciphertext, prepare_issuer_disclosure, AcceptedBlock,
+            IssuerDisclosureKind, IssuerRequest,
+        };
+        let block = AcceptedBlock {
+            height: 4,
+            transactions: vec![transaction.clone()],
+        };
+        let mut packages = vec![];
+        for selection in &selections[..3] {
+            let accepted = accepted_audit_ciphertext(selection.clone(), TEST_CHAIN_ID, &block)?;
+            let request = IssuerRequest {
+                kind: IssuerDisclosureKind::Issuer,
+                version: 1,
+                recipient: None,
+                challenge: None,
+                selection: selection.clone(),
+                asset: asset.to_string(),
+            };
+            packages.push(prepare_issuer_disclosure(
+                OsRng, &accepted, request, &issuer,
+            )?);
+        }
+        std::fs::write(&issuer_file, serde_json::to_vec(&packages)?)?;
+    }
     let runner = std::env::var("BANKD_ORBIS_TEST_BIN")?;
     let status = tokio::process::Command::new(runner)
         .args([
@@ -405,6 +477,14 @@ async fn accepted_transaction_through_live_orbis() -> Result<()> {
         ])
         .env("BANKD_TEST_SELECTIONS", &package)
         .env("BANKD_TEST_NODE", &fixture.shieldd_node)
+        .env(
+            "BANKD_TEST_ISSUER_DISCLOSURES",
+            if issuer_only {
+                issuer_file.as_os_str()
+            } else {
+                std::ffi::OsStr::new("")
+            },
+        )
         .status()
         .await?;
     ensure!(status.success(), "Bankd live collection workflow failed");
