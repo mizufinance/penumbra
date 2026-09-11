@@ -23,6 +23,7 @@ decaf377 = { workspace = true }
 decaf377-ka = { workspace = true }
 decaf377-rdsa = { workspace = true }
 shieldd-sdk-keys = { workspace = true }
+shieldd-sdk-compliance = { workspace = true, default-features = false }
 shieldd-sdk-asset = { workspace = true }
 shieldd-sdk-shielded-pool = { workspace = true }
 shieldd-sdk-transaction = { workspace = true, default-features = false }

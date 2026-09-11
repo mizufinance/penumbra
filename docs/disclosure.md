@@ -55,6 +55,7 @@ signature alone does not authenticate successful Shieldd execution.
 
 ```sh
 pcli disclosure capabilities
+pcli disclosure audit-ciphertext selection.json --node http://localhost:9090
 pcli disclosure export --wallet wallet.sqlite --request request.json --output disclosure.json --openings
 pcli disclosure export --wallet wallet.sqlite --request request.json --output disclosure.json --payload-keys
 pcli disclosure export --wallet wallet.sqlite --request request.json --output disclosure.json
@@ -74,6 +75,13 @@ process with private stdin and a restrictive temporary result file. Cancellation
 kills its process group. A package is published atomically only after verification;
 existing files are never overwritten. Import stores the original verified receipt
 without adding spendable notes.
+
+`audit-ciphertext` resolves a canonical compliance tier from committed node data
+without opening a wallet. Its selection contains `version: 1`, `chain_id`, an
+ordinary Transfer `reference`, and `tier` (`sender_core`, `sender_ext`,
+`output_core`, or `output_ext`). The reference uses receiver output index zero.
+The result contains the accepted ciphertext, metadata, and selected ephemeral
+key. It is not a portable inclusion proof or an authorization to perform PRE.
 
 ## Spending-authority control
 

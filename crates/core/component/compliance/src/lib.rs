@@ -159,6 +159,7 @@ pub use scanner::{
 };
 
 pub mod decode_object;
+pub mod transfer_audit;
 pub use decode_object::{TransferComplianceMetadata, TRANSFER_COMPLIANCE_METADATA_BYTES};
 
 #[cfg(feature = "poc-orbis")]

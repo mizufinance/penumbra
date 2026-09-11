@@ -1,6 +1,8 @@
 //! Selected-payment disclosure claims; wallet, node and prover effects live at the edge.
 mod claims;
 mod transaction;
+mod audit;
+pub use audit::*;
 mod types;
 pub use claims::*;
 pub use transaction::*;

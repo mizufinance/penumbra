@@ -13,6 +13,12 @@ use tokio::io::AsyncWriteExt;
 pub enum DisclosureCmd {
     /// Machine adapter protocol and supported package identity.
     Capabilities,
+    /// Resolve canonical compliance ciphertext from a chosen node, without a wallet.
+    AuditCiphertext {
+        selection: Utf8PathBuf,
+        #[clap(long)]
+        node: String,
+    },
     /// Validate a request without loading wallet or custody configuration.
     ValidateRequest { request: Utf8PathBuf },
     /// Export explicitly selected claims using a local background prover.
@@ -142,7 +148,10 @@ fn check_request(package: &sdk::DisclosurePackage, expected: Option<&Utf8Path>) 
     Ok(())
 }
 
-async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk::Acceptance> {
+async fn accepted_blocks(
+    node: &str,
+    heights: BTreeSet<u64>,
+) -> Result<(String, Vec<sdk::AcceptedBlock>)> {
     let channel = tonic::transport::Endpoint::from_shared(node.to_owned())?
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(30))
@@ -165,13 +174,6 @@ async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk:
         .app_parameters
         .context("node omitted chain parameters")?
         .chain_id;
-    let heights: BTreeSet<_> = package
-        .statement
-        .request
-        .outputs
-        .iter()
-        .map(|c| c.reference.height)
-        .collect();
     let mut blocks = Vec::new();
     for height in heights {
         client.ready().await?;
@@ -200,12 +202,41 @@ async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk:
                 .collect::<Result<Vec<_>>>()?,
         });
     }
+    Ok((chain_id, blocks))
+}
+
+async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk::Acceptance> {
+    let heights = package
+        .statement
+        .request
+        .outputs
+        .iter()
+        .map(|c| c.reference.height)
+        .collect();
+    let (chain_id, blocks) = accepted_blocks(node, heights).await?;
     sdk::confirm_acceptance(&package.statement, &chain_id, &blocks)
 }
 
 impl DisclosureCmd {
     pub async fn exec(&self, home: &Utf8Path) -> Result<()> {
         match self {
+            Self::AuditCiphertext { selection, node } => {
+                let selection: sdk::AuditSelection =
+                    serde_json::from_slice(&read_bounded(selection, sdk::MAX_DOCUMENT_BYTES)?)?;
+                ensure!(
+                    selection.version == 1 && selection.reference.height > 0,
+                    "invalid audit selection"
+                );
+                let (chain, blocks) =
+                    accepted_blocks(node, [selection.reference.height].into_iter().collect())
+                        .await?;
+                let accepted = sdk::accepted_audit_ciphertext(
+                    selection,
+                    &chain,
+                    blocks.first().context("accepted block unavailable")?,
+                )?;
+                println!("{}", serde_json::to_string(&accepted)?);
+            }
             Self::ValidateRequest { request } => {
                 let request: sdk::DisclosureRequest =
                     serde_json::from_slice(&read_bounded(request, sdk::MAX_DOCUMENT_BYTES)?)?;
@@ -214,7 +245,7 @@ impl DisclosureCmd {
             }
             Self::Capabilities => println!(
                 "{}",
-                serde_json::json!({"protocol":1,"package_version":sdk::VERSION,"circuit":sdk::CIRCUIT_ID,"development_artifacts":cfg!(all(feature="development-disclosure-artifacts",debug_assertions))})
+                serde_json::json!({"protocol":1,"package_version":sdk::VERSION,"audit_ciphertext_version":1,"circuit":sdk::CIRCUIT_ID,"development_artifacts":cfg!(all(feature="development-disclosure-artifacts",debug_assertions))})
             ),
             Self::Inspect { package } => {
                 let package = sdk::decode_package(&read_bounded(package, sdk::MAX_PACKAGE_BYTES)?)?;

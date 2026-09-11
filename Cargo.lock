@@ -6472,6 +6472,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.8",
  "shieldd-sdk-asset",
+ "shieldd-sdk-compliance",
  "shieldd-sdk-keys",
  "shieldd-sdk-proto",
  "shieldd-sdk-shielded-pool",
