@@ -1,0 +1,13 @@
+{
+  "command": [
+    "bash",
+    "Scripts/mal-shamir.sh",
+    "audit_lakey_12_40_init"
+  ],
+  "exit_code": 0,
+  "stopped_for": null,
+  "elapsed_seconds": 1.0269199170006686,
+  "sampled_peak_rss_kb": 528,
+  "swap_start_mb": 0.0,
+  "swap_end_mb": 0.0
+}

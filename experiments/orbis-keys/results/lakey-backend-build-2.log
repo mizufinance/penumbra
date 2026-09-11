@@ -1,0 +1,29 @@
+clang++ -o Processor/BaseMachine.o Processor/BaseMachine.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+clang++ -o Processor/ExternalClients.o Processor/ExternalClients.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+In file included from Processor/ExternalClients.cpp:1:
+In file included from ./Processor/ExternalClients.h:5:
+./Networking/ssl_sockets.h:21:22: error: no type named 'io_service' in namespace 'boost::asio'
+   21 | typedef boost::asio::io_service ssl_service;
+      |         ~~~~~~~~~~~~~^
+./Networking/ssl_sockets.h:49:29: error: no type named 'io_service' in namespace 'boost::asio'
+   49 |     ssl_socket(boost::asio::io_service& io_service,
+      |                ~~~~~~~~~~~~~^
+clang++ -o Processor/FixInput.o Processor/FixInput.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+./Networking/ssl_sockets.h:60:47: error: no member named 'rfc2818_verification' in namespace 'boost::asio::ssl'
+   60 |         set_verify_callback(boost::asio::ssl::rfc2818_verification(other));
+      |                             ~~~~~~~~~~~~~~~~~~^
+Processor/ExternalClients.cpp:57:44: error: no matching constructor for initialization of 'client_socket' (aka 'ssl_socket')
+   57 |   external_client_sockets[client_id] = new client_socket(io_service, *ctx, socket,
+      |                                            ^             ~~~~~~~~~~~~~~~~~~~~~~~~~
+   58 |       "C" + to_string(client_id), "P" + to_string(get_party_num()), false);
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+./Networking/ssl_sockets.h:44:7: note: candidate constructor (the implicit copy constructor) not viable: requires 1 argument, but 6 were provided
+   44 | class ssl_socket : public boost::asio::ssl::stream<boost::asio::ip::tcp::socket>
+      |       ^~~~~~~~~~
+./Networking/ssl_sockets.h:44:7: note: candidate constructor (the implicit move constructor) not viable: requires 1 argument, but 6 were provided
+   44 | class ssl_socket : public boost::asio::ssl::stream<boost::asio::ip::tcp::socket>
+      |       ^~~~~~~~~~
+./Networking/ssl_sockets.h:44:7: note: candidate constructor (the implicit default constructor) not viable: requires 0 arguments, but 6 were provided
+4 errors generated.
+make: *** [Processor/ExternalClients.o] Error 1
+make: *** Waiting for unfinished jobs....

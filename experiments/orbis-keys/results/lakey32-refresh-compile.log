@@ -1,0 +1,19 @@
+Default bit length: 64
+Default security parameter: 40
+Compiling file Programs/Source/audit_lakey_32_128_refresh.mpc
+Changed statistical security for comparison etc. to 128
+ring=GFP, q=2^32, p=2^24, m=512, l=16
+KEYGEN=True, COMPOSE=True, REVEAL=False, OPTIMIZE=False
+Compiled 100000 lines at Fri Sep 11 11:00:35 2026
+Compiled 200000 lines at Fri Sep 11 11:00:35 2026
+Compiled 300000 lines at Fri Sep 11 11:00:36 2026
+Compiled 400000 lines at Fri Sep 11 11:00:37 2026
+Writing to Programs/Schedules/audit_lakey_32_128_refresh.sch
+Writing to Programs/Bytecode/audit_lakey_32_128_refresh-0.bc
+Hash: 7f7b2dcc10352869d7cb8f8dd1db15d65146b3fff42588fd4382391e29709219
+Program requires at most:
+         512 integer randoms
+         640 integer opens
+       23104 integer bits
+        4352 integer triples
+          11 virtual machine rounds

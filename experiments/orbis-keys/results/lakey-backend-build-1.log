@@ -1,0 +1,14 @@
+clang++ -o Processor/BaseMachine.o Processor/BaseMachine.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+clang++ -o Processor/DataPositions.o Processor/DataPositions.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+In file included from Processor/BaseMachine.cpp:6:
+In file included from Processor/BaseMachine.h:11:
+In file included from ./OT/OTTripleSetup.h:5:
+In file included from ./OT/BaseOT.h:13:
+In file included from ./Tools/BitVector.h:15:
+In file included from ./Math/gf2nlong.h:18:
+./Math/bigint.h:286:13: error: use of undeclared identifier 'mpz_probable_prime_p'
+  286 |   int ans = mpz_probable_prime_p(x.get_mpz_t(), rand_state,
+      |             ^
+1 error generated.
+make: *** [Processor/BaseMachine.o] Error 1
+make: *** Waiting for unfinished jobs....

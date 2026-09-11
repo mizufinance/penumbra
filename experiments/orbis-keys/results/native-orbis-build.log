@@ -1,0 +1,76 @@
+    Updating crates.io index
+    Updating git repository `https://github.com/sourcenetwork/orbis-rs`
+     Locking 22 packages to latest compatible versions
+      Adding ahash v0.8.12
+      Adding allocator-api2 v0.2.21
+      Adding ark-bls12-377 v0.4.0
+      Adding ark-ec v0.4.2
+      Adding ark-ed-on-bls12-377 v0.4.0
+      Adding ark-ff v0.4.2 (available: v0.6.0)
+      Adding ark-ff-asm v0.4.2
+      Adding ark-ff-macros v0.4.2
+      Adding ark-poly v0.4.2
+      Adding ark-serialize v0.4.2
+      Adding ark-serialize-derive v0.4.2
+      Adding ark-std v0.4.0
+      Adding crypto v0.0.1 (https://github.com/sourcenetwork/orbis-rs?rev=0d30611ba0f85ed0c1b17267277069cd7acef16e#0d30611b)
+      Adding decaf377 v0.10.1
+      Adding derivative v2.2.0
+      Adding hashbrown v0.13.2
+      Adding hashbrown v0.14.5
+      Adding itertools v0.10.5
+      Adding once_cell v1.21.4
+      Adding rustc_version v0.4.1
+      Adding semver v1.0.28
+      Adding syn v1.0.109
+   Compiling syn v1.0.109
+   Compiling ahash v0.8.12
+   Compiling zeroize v1.9.0
+   Compiling once_cell v1.21.4
+   Compiling ark-std v0.4.0
+   Compiling either v1.18.0
+   Compiling itertools v0.10.5
+   Compiling hashbrown v0.13.2
+   Compiling allocator-api2 v0.2.21
+   Compiling hashbrown v0.14.5
+   Compiling ic_bls12_381 v0.10.1
+   Compiling ark-serialize-derive v0.4.2
+   Compiling ark-serialize v0.4.2
+   Compiling derivative v2.2.0
+   Compiling ark-ff-asm v0.4.2
+   Compiling ark-ff-macros v0.4.2
+   Compiling ark-ff v0.4.2
+   Compiling ic-vetkeys v0.9.0
+   Compiling ark-poly v0.4.2
+   Compiling ark-ec v0.4.2
+   Compiling ark-bls12-377 v0.4.0
+   Compiling ark-ed-on-bls12-377 v0.4.0
+   Compiling decaf377 v0.10.1
+   Compiling crypto v0.0.1 (https://github.com/sourcenetwork/orbis-rs?rev=0d30611ba0f85ed0c1b17267277069cd7acef16e#0d30611b)
+   Compiling orbis-key-experiments v0.1.0 (/Users/antoinecyr/Documents/Source/shieldd-key-experiments/experiments/orbis-keys/native)
+warning: unused import: `Field`
+ --> src/bin/lakey_pre.rs:2:14
+  |
+2 | use ark_ff::{Field, PrimeField};
+  |              ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+error[E0509]: cannot move out of type `ReencryptReply<decaf377::fields::fr::u64::Fr, Element>`, which implements the `Drop` trait
+   --> src/bin/lakey_pre.rs:104:30
+    |
+104 |                 replies.push(reply.share);
+    |                              ^^^^^^^^^^^
+    |                              |
+    |                              cannot move out of here
+    |                              move occurs because `reply.share` has type `PubShare<Element>`, which does not implement the `Copy` trait
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+104 |                 replies.push(reply.share.clone());
+    |                                         ++++++++
+
+For more information about this error, try `rustc --explain E0509`.
+warning: `orbis-key-experiments` (bin "lakey_pre") generated 1 warning
+error: could not compile `orbis-key-experiments` (bin "lakey_pre") due to 1 previous error; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,15 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 audit_lakey_12_40_derive -T 1 -pn 12299 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 audit_lakey_12_40_derive -T 1 -pn 12299 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 audit_lakey_12_40_derive -T 1 -pn 12299 -h localhost -N 3
+Using security parameter 40
+Starting timer 3 at 0 (0 MB) after 2e-06
+Stopped timer 3 at 3.15094 (532.845 MB)
+Four transient derived shares written per node; no clear key output
+The following benchmarks are including preprocessing (offline phase).
+Time = 3.15177 seconds 
+Time3 = 3.15094 seconds (532.845 MB)
+Data sent = 532.845 MB in ~15290 rounds (party 0; use '-v' for more details)
+Global data sent = 1343.18 MB (all parties)
+This program might benefit from some protocol options.
+Consider adding the following at the beginning of 'audit_lakey_12_40_derive.mpc':
+	program.use_edabit(True)

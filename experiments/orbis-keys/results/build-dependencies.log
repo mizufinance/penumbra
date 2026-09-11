@@ -1,0 +1,76 @@
+Warning: The following taps are not trusted:
+  bufbuild/buf
+  f1bonacc1/tap
+
+Homebrew is currently ignoring formulae, casks and commands from these taps because tap trust is required.
+
+Prefer trusting only the specific formulae, casks or commands you need.
+Trust installed formulae from these taps with:
+  brew trust --formula bufbuild/buf/buf
+  brew trust --formula f1bonacc1/tap/process-compose
+Trust other specific casks and commands with:
+  brew trust --cask <user>/<tap>/<cask>
+  brew trust --command <user>/<tap>/<command>
+Whole-tap trust is broader and includes all current and future formulae,
+casks and commands from the listed taps. Trust whole taps with:
+  brew trust bufbuild/buf f1bonacc1/tap
+Untap them with:
+  brew untap bufbuild/buf f1bonacc1/tap
+To disable trust checks:
+  export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
+This is not recommended and will be removed in a later release.
+For more information, see:
+  https://docs.brew.sh/Tap-Trust
+==> Downloading bottle manifests
+✔︎ Bottle Manifest autoconf (2.73)
+✔︎ Bottle Manifest automake (1.18.1_1)
+✔︎ Bottle Manifest libtool (2.6.2)
+==> Would install 3 formulae:
+autoconf automake libtool
+==> Would install 1 dependency for autoconf:
+m4
+==> Would install 2 dependencies for automake:
+m4
+autoconf
+==> Would install 1 dependency for libtool:
+m4
+==> Fetching downloads for: autoconf, automake and libtool
+✔︎ Bottle Manifest m4 (1.4.21)
+✔︎ Bottle m4 (1.4.21)
+✔︎ Bottle autoconf (2.73)
+✔︎ Bottle automake (1.18.1_1)
+✔︎ Bottle libtool (2.6.2)
+==> Installing autoconf dependency: m4
+==> Pouring m4--1.4.21.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/m4/1.4.21: 14 files, 816.2KB
+==> Installing autoconf
+==> Pouring autoconf--2.73.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/autoconf/2.73: 73 files, 3.8MB
+==> Running `brew cleanup autoconf`...
+Disable this behaviour by setting `HOMEBREW_NO_INSTALL_CLEANUP=1`.
+Hide these hints with `HOMEBREW_NO_ENV_HINTS=1` (see `man brew`).
+==> Pouring automake--1.18.1_1.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/automake/1.18.1_1: 134 files, 3.6MB
+==> Running `brew cleanup automake`...
+==> Pouring libtool--2.6.2.arm64_sequoia.bottle.tar.gz
+==> Caveats
+All commands have been installed with the prefix "g".
+If you need to use these commands with their normal names, you
+can add a "gnubin" directory to your PATH from your bashrc like:
+  PATH="/opt/homebrew/opt/libtool/libexec/gnubin:$PATH"
+==> Summary
+🍺  /opt/homebrew/Cellar/libtool/2.6.2: 78 files, 4.2MB
+==> Running `brew cleanup libtool`...
+==> `brew cleanup` has not been run in the last 30 days, running now...
+Disable this behaviour by setting `HOMEBREW_NO_INSTALL_CLEANUP=1`.
+Hide these hints with `HOMEBREW_NO_ENV_HINTS=1` (see `man brew`).
+==> Autoremoving 1 unneeded formula:
+gdk-pixbuf
+Uninstalling /opt/homebrew/Cellar/gdk-pixbuf/2.44.6... (151 files, 4.2MB)
+Removing: /Users/antoinecyr/Library/Caches/Homebrew/portable-ruby-4.0.6.arm64_big_sur.bottle.tar.gz... (12.7MB)
+==> Caveats
+==> libtool
+All commands have been installed with the prefix "g".
+If you need to use these commands with their normal names, you
+can add a "gnubin" directory to your PATH from your bashrc like:
+  PATH="/opt/homebrew/opt/libtool/libexec/gnubin:$PATH"

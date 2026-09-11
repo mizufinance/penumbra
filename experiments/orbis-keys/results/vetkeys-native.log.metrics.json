@@ -1,0 +1,11 @@
+{
+  "command": [
+    "./target/release/orbis-key-experiments"
+  ],
+  "exit_code": 0,
+  "stopped_for": null,
+  "elapsed_seconds": 4.083344957999543,
+  "sampled_peak_rss_kb": 2864,
+  "swap_start_mb": 0.0,
+  "swap_end_mb": 0.0
+}

@@ -1,0 +1,17 @@
+{
+  "command": [
+    "target/release/lakey_pre",
+    "/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Persistence",
+    "5",
+    "3",
+    "../results/lakey32-public-reference.json",
+    "32",
+    "128"
+  ],
+  "exit_code": 0,
+  "stopped_for": null,
+  "elapsed_seconds": 1.0259705419994134,
+  "sampled_peak_rss_kb": 1728,
+  "swap_start_mb": 0.0,
+  "swap_end_mb": 0.0
+}

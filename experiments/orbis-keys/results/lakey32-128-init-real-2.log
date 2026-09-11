@@ -1,0 +1,19 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 16933 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 16933 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 16933 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 3 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 16933 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 4 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 16933 -h localhost -N 5
+Using security parameter 128
+Starting timer 1 at 0 (0 MB) after 2e-06
+Stopped timer 1 at 0.07507 (12.4807 MB)
+Master shares initialized; no clear key output
+Significant amount of unused bits of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.075919 seconds 
+Time1 = 0.07507 seconds (12.4807 MB)
+Data sent = 12.4809 MB in ~20 rounds (party 0; use '-v' for more details)
+Global data sent = 56.0042 MB (all parties)
+This program might benefit from some protocol options.
+Consider adding the following at the beginning of 'audit_lakey_32_128_init.mpc':
+	program.use_edabit(True)

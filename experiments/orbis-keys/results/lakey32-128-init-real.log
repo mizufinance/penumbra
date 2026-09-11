@@ -1,0 +1,21 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 18502 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 18502 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 18502 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 3 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 18502 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 4 audit_lakey_32_128_init --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 18502 -h localhost -N 5
+Using security parameter 128
+libc++abi: terminating due to uncaught exception of type std::runtime_error: no suitable field for minimum degree 128
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/run-common.sh: line 62: 35798 Abort trap: 6              $prefix $SPDZROOT/$bin $i $params 2>&1
+     35799 Done                       | { if test "$BENCH"; then
+    if test $i = 0; then
+        tee -a $log;
+    else
+        cat >> $log;
+    fi;
+else
+    if test $i = 0; then
+        tee $log;
+    else
+        cat > $log;
+    fi;
+fi; }

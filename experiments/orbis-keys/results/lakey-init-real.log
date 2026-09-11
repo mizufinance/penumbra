@@ -1,0 +1,17 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 audit_lakey_12_40_init -T 1 -pn 11684 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 audit_lakey_12_40_init -T 1 -pn 11684 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 audit_lakey_12_40_init -T 1 -pn 11684 -h localhost -N 3
+Using security parameter 40
+Starting timer 1 at 0 (0 MB) after 2e-06
+Stopped timer 1 at 0.015342 (3.52017 MB)
+Master shares initialized; no clear key output
+Significant amount of unused bits of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.015924 seconds 
+Time1 = 0.015342 seconds (3.52017 MB)
+Data sent = 3.52023 MB in ~10 rounds (party 0; use '-v' for more details)
+Global data sent = 8.0007 MB (all parties)
+This program might benefit from some protocol options.
+Consider adding the following at the beginning of 'audit_lakey_12_40_init.mpc':
+	program.use_edabit(True)

@@ -1,0 +1,15 @@
+{
+  "command": [
+    "bash",
+    "Scripts/mal-shamir.sh",
+    "audit_lakey_12_40_refresh",
+    "--prime",
+    "2111115437357092606062206234695386632838870926408408195193685246394721360383"
+  ],
+  "exit_code": 0,
+  "stopped_for": null,
+  "elapsed_seconds": 3.060934415999327,
+  "sampled_peak_rss_kb": 350048,
+  "swap_start_mb": 0.0,
+  "swap_end_mb": 0.0
+}

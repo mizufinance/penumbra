@@ -1,0 +1,15 @@
+{
+  "command": [
+    "./compile.py",
+    "-O",
+    "-g",
+    "256",
+    "audit_lakey_12_40_derive"
+  ],
+  "exit_code": 0,
+  "stopped_for": null,
+  "elapsed_seconds": 19.436805041999833,
+  "sampled_peak_rss_kb": 1190112,
+  "swap_start_mb": 0.0,
+  "swap_end_mb": 0.0
+}

@@ -1,0 +1,21 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 audit_lakey_12_40_refresh --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -T 1 -pn 19768 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 audit_lakey_12_40_refresh --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -T 1 -pn 19768 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 audit_lakey_12_40_refresh --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -T 1 -pn 19768 -h localhost -N 3
+Using security parameter 40
+Starting timer 2 at 0 (0 MB) after 2e-06
+Stopped timer 2 at 0.007682 (0.672864 MB)
+Experimental same-committee zero-share refresh; not membership migration
+Starting timer 3 at 0 (0 MB) after 0
+Stopped timer 3 at 0.058994 (10.3562 MB)
+Four transient derived shares written per node; no clear key output
+Significant amount of unused triples of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.06746 seconds 
+Time2 = 0.007682 seconds (0.672864 MB)
+Time3 = 0.058994 seconds (10.3562 MB)
+Data sent = 11.0291 MB in ~42 rounds (party 0; use '-v' for more details)
+Global data sent = 26.6873 MB (all parties)
+This program might benefit from some protocol options.
+Consider adding the following at the beginning of 'audit_lakey_12_40_refresh.mpc':
+	program.use_edabit(True)

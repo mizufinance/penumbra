@@ -1,0 +1,16 @@
+{
+  "command": [
+    "go",
+    "run",
+    "-p",
+    "2",
+    "./cmd/audit-key-experiment",
+    "-prove"
+  ],
+  "exit_code": 0,
+  "stopped_for": null,
+  "elapsed_seconds": 186.1422552089998,
+  "sampled_peak_rss_kb": 2154736,
+  "swap_start_mb": 0.0,
+  "swap_end_mb": 0.0
+}

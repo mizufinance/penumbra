@@ -1,0 +1,7 @@
+10:28:20 INF compiling circuit
+10:28:20 INF parsed circuit inputs nbPublic=72 nbSecret=12
+10:28:21 INF building constraint builder nbConstraints=741963
+10:31:16 DBG constraint system solver done nbConstraints=741963 took=480.057542
+10:31:25 DBG prover done acceleration=none backend=groth16 curve=bls12_377 nbConstraints=741963 took=8830.467459
+10:31:25 DBG verifier done backend=groth16 curve=bls12_377 took=2.079959
+{"altered_public_result":"rejected","case":"BLS12-381 fixed-root pairing on Shieldd field","compile_seconds":0.948966833,"constraints":741963,"proof_bytes":292,"prove_seconds":9.310656125,"scope":"one pairing and G1 subgroup check; excludes identity hash and IBE masks","setup_seconds":174.780703292,"verify_seconds":0.002123375}

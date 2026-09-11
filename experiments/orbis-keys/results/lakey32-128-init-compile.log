@@ -1,0 +1,11 @@
+Default bit length: 64
+Default security parameter: 40
+Compiling file Programs/Source/audit_lakey_32_128_init.mpc
+Changed statistical security for comparison etc. to 128
+ring=GFP, q=2^32, p=2^24, m=512, l=16
+KEYGEN=True, COMPOSE=True, REVEAL=False, OPTIMIZE=False
+Writing to Programs/Schedules/audit_lakey_32_128_init.sch
+Writing to Programs/Bytecode/audit_lakey_32_128_init-0.bc
+Hash: a868dce5a8e7d9723c7a98f43772afb97a552b05ae3b9bbd613a6ae69ad8b8f9
+Program requires at most:
+       16384 integer bits

@@ -1,0 +1,15 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 lattice_prf -lgp 256 -T 1 -pn 11595 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 lattice_prf -lgp 256 -T 1 -pn 11595 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 lattice_prf -lgp 256 -T 1 -pn 11595 -h localhost -N 3
+Using security parameter 40
+Significant amount of unused triples of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+Significant amount of unused bits of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.054944 seconds 
+Data sent = 10.0295 MB in ~35 rounds (party 0; use '-v' for more details)
+Global data sent = 24.3284 MB (all parties)
+This program might benefit from some protocol options.
+Consider adding the following at the beginning of 'lattice_prf.mpc':
+	program.use_edabit(True)

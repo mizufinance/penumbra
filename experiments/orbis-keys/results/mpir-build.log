@@ -1,0 +1,11 @@
+touch CONFIG.mine
+git submodule update --init deps/mpir || git clone https://github.com/wbhart/mpir deps/mpir
+Submodule 'mpir' (https://github.com/wbhart/mpir) registered for path 'deps/mpir'
+Cloning into '/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/deps/mpir'...
+Submodule path 'deps/mpir': checked out '55fe6a9f52ca532a611a89f67186ed915bbf1123'
+cd deps/mpir; \
+	autoreconf -i; \
+	autoreconf -i
+/bin/sh: autoreconf: command not found
+/bin/sh: autoreconf: command not found
+make: *** [deps/mpir/Makefile] Error 127

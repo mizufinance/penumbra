@@ -1,0 +1,20 @@
+clang++ -o Processor/ExternalClients.o Processor/ExternalClients.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+clang++ -o Processor/FloatInput.o Processor/FloatInput.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+clang++ -o Processor/HonestMajorityMachine.o Processor/HonestMajorityMachine.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+In file included from Processor/HonestMajorityMachine.cpp:15:
+In file included from Processor/OnlineMachine.hpp:9:
+./Networking/CryptoPlayer.h:24:5: error: no type named 'io_service' in namespace 'boost::asio'; did you mean 'ssl_service'?
+   24 |     boost::asio::io_service io_service;
+      |     ^~~~~~~~~~~~~~~~~~~~~~~
+      |     ssl_service
+./Networking/ssl_sockets.h:21:33: note: 'ssl_service' declared here
+   21 | typedef boost::asio::io_context ssl_service;
+      |                                 ^
+In file included from Processor/HonestMajorityMachine.cpp:15:
+Processor/OnlineMachine.hpp:181:16: error: cannot initialize return object of type 'Player *' with an rvalue of type 'CryptoPlayer *'
+  181 |         return new CryptoPlayer(playerNames, id_base);
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+clang++ -o Processor/Instruction.o Processor/Instruction.cpp -DNO_AVX_OT -I./local/include  -I/opt/homebrew/include -I/opt/homebrew/opt/openssl@3/include  -Wextra -Wall -O3 -I. -I./deps -pthread    -DUSE_GF2N_LONG '-DPREP_DIR="Player-Data/"' '-DSSL_DIR="Player-Data/"'  -std=c++11 -Werror -Wno-error=deprecated-declarations -std=c++17 -fPIC -MMD -MP -c
+2 errors generated.
+make: *** [Processor/HonestMajorityMachine.o] Error 1
+make: *** Waiting for unfinished jobs....

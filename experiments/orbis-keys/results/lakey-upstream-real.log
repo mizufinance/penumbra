@@ -1,0 +1,20 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 lattice_prf -lgp 256 -T 1 -pn 16348 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 lattice_prf -lgp 256 -T 1 -pn 16348 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 lattice_prf -lgp 256 -T 1 -pn 16348 -h localhost -N 3
+Using security parameter 40
+libc++abi: terminating due to uncaught exception of type std::runtime_error: Cannot access Player-Data/P0.pem. Have you set up SSL?
+You can use `Scripts/setup-ssl.sh <nparties>`.
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/run-common.sh: line 62: 33383 Abort trap: 6              $prefix $SPDZROOT/$bin $i $params 2>&1
+     33384 Done                       | { if test "$BENCH"; then
+    if test $i = 0; then
+        tee -a $log;
+    else
+        cat >> $log;
+    fi;
+else
+    if test $i = 0; then
+        tee $log;
+    else
+        cat > $log;
+    fi;
+fi; }

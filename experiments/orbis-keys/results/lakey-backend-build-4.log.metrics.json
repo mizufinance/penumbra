@@ -1,0 +1,13 @@
+{
+  "command": [
+    "make",
+    "-j2",
+    "malicious-shamir-party.x"
+  ],
+  "exit_code": 0,
+  "stopped_for": null,
+  "elapsed_seconds": 31.70921625000028,
+  "sampled_peak_rss_kb": 1290384,
+  "swap_start_mb": 0.0,
+  "swap_end_mb": 0.0
+}

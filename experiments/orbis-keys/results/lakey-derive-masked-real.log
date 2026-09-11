@@ -1,0 +1,17 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 audit_lakey_12_40_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -T 1 -pn 10812 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 audit_lakey_12_40_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -T 1 -pn 10812 -h localhost -N 3
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 audit_lakey_12_40_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -T 1 -pn 10812 -h localhost -N 3
+Using security parameter 40
+Starting timer 3 at 0 (0 MB) after 3e-06
+Stopped timer 3 at 0.060297 (10.3562 MB)
+Four transient derived shares written per node; no clear key output
+Significant amount of unused triples of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.061361 seconds 
+Time3 = 0.060297 seconds (10.3562 MB)
+Data sent = 10.3562 MB in ~35 rounds (party 0; use '-v' for more details)
+Global data sent = 25.3087 MB (all parties)
+This program might benefit from some protocol options.
+Consider adding the following at the beginning of 'audit_lakey_12_40_derive.mpc':
+	program.use_edabit(True)

@@ -1,0 +1,51 @@
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:487: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  """ :math:`\mathrm{GF}(2^n)` functionality. """
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:490: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  """ MUX in :math:`\mathrm{GF}(2^n)` circuits. Similar to :py:meth:`_int.if_else`. """
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:494: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  """ Swapping in :math:`\mathrm{GF}(2^n)`. Similar to :py:meth:`_int.if_else`. """
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:503: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  """ XOR in :math:`\mathrm{GF}(2^n)` circuits.
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:1257: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  Clear :math:`\mathrm{GF}(2^n)` value. n is chosen at runtime.  A
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:1275: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  """ Clear :math:`\mathrm{GF}(2^n)` bit composition.
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:1369: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  :param bit_length: number of bits (defaults to global :math:`\mathrm{GF}(2^n)` bit length)
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:3008: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  Secret :math:`\mathrm{GF}(2^n)` value. n is chosen at runtime.  A
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:3036: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  """ Secret :math:`\mathrm{GF}(2^n)` addition (XOR).
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:3045: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  """ Secret :math:`\mathrm{GF}(2^n)` multiplication.
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:3113: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  :param bit_length: number of bits of :py:obj:`self` (defaults to :math:`\mathrm{GF}(2^n)` bit length) """
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:4943: SyntaxWarning: "\c" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\c"? A raw string is also an option.
+  Represents :math:`(1 - 2s) \cdot (1 - z)\cdot v \cdot 2^p`.
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/types.py:5976: SyntaxWarning: "\l" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\l"? A raw string is also an option.
+  :math:`O(n \log n)` for :py:class:`sint` and :py:class:`sfix`,
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/instructions.py:385: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  :param: domain (0: integer, 1: :math:`\mathrm{GF}(2^n)`, 2: bit)
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/instructions.py:404: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  :param: domain (0: integer, 1: :math:`\mathrm{GF}(2^n)`, 2: bit)
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/instructions.py:1587: SyntaxWarning: "\c" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\c"? A raw string is also an option.
+  Outputs :math:`x \cdot 2^p` where :math:`p` is the precision.
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/instructions.py:2181: SyntaxWarning: "\m" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\m"? A raw string is also an option.
+  :math:`(p-1) \mod 2^{64}`.
+/Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Compiler/instructions.py:2610: SyntaxWarning: "\c" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\c"? A raw string is also an option.
+  """ Secret squaring $s_i = s_j \cdot s_j$. """
+Default bit length: 64
+Default security parameter: 40
+Compiling file Programs/Source/lattice_prf.mpc
+ring=GFP, q=2^12, p=2^8, m=512, l=37
+KEYGEN=True, COMPOSE=True, REVEAL=False, OPTIMIZE=False
+Compiled 100000 lines at Fri Sep 11 10:41:59 2026
+Compiled 200000 lines at Fri Sep 11 10:42:00 2026
+Writing to Programs/Schedules/lattice_prf.sch
+Writing to Programs/Bytecode/lattice_prf-0.bc
+Hash: aee1e829bd941c3dee79719f6b595dcce98755c53aa30350e38ecb8b43338dde
+Program requires at most:
+       10769 integer bits
+          74 integer opens
+         814 integer triples
+           8 virtual machine rounds

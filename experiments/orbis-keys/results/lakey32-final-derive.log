@@ -1,0 +1,21 @@
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 0 audit_lakey_32_128_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 19699 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 1 audit_lakey_32_128_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 19699 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 2 audit_lakey_32_128_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 19699 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 3 audit_lakey_32_128_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 19699 -h localhost -N 5
+Running /Users/antoinecyr/Documents/Source/orbis-experiment-deps/MP-SPDZ/Scripts/../malicious-shamir-party.x 4 audit_lakey_32_128_derive --prime 2111115437357092606062206234695386632838870926408408195193685246394721360383 -S 128 -T 2 -pn 19699 -h localhost -N 5
+Using security parameter 128
+Starting timer 3 at 0 (0 MB) after 2e-06
+Stopped timer 3 at 0.159049 (24.8121 MB)
+Four transient derived shares written per node; no clear key output
+Significant amount of unused triples of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+Significant amount of unused bits of Shamir gfp. For more accurate benchmarks, consider reducing the batch size with --batch-size.
+Note that some protocols have larger minimum batch sizes.
+The following benchmarks are including preprocessing (offline phase).
+Time = 0.160595 seconds 
+Time3 = 0.159049 seconds (24.8121 MB)
+Data sent = 24.8122 MB in ~48 rounds (party 0; use '-v' for more details)
+Global data sent = 113.501 MB (all parties)
+This program might benefit from some protocol options.
+Consider adding the following at the beginning of 'audit_lakey_32_128_derive.mpc':
+	program.use_edabit(True)

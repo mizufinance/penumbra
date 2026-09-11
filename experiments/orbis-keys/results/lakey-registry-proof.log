@@ -1,0 +1,10 @@
+10:43:24 INF compiling circuit
+10:43:24 INF parsed circuit inputs nbPublic=1 nbSecret=140
+10:43:24 INF building constraint builder nbConstraints=18334
+10:43:28 DBG constraint system solver done nbConstraints=18334 took=3.191583
+10:43:28 DBG prover done acceleration=none backend=groth16 curve=bls12_377 nbConstraints=18334 took=361.2795
+10:43:28 DBG verifier done backend=groth16 curve=bls12_377 took=0.929792
+10:43:28 ERR error="constraint #9166 is not satisfied: 1722818266039577383424043252702576238018038899913854083500205016762224705271 ⋅ 1 != 2666887100568553458090578383608912616637114759890978583908293109764878072088" nbConstraints=18334
+10:43:28 ERR error="constraint #430 is not satisfied: -1 ⋅ 2 != 0" nbConstraints=18334
+10:43:28 ERR error="constraint #9166 is not satisfied: 8078697057716782473551420736865811875916559226291809236827369889867044309367 ⋅ 1 != 2666887100568553458090578383608912616637114759890978583908293109764878072088" nbConstraints=18334
+{"case":"two hidden 32-level Poseidon377 key memberships","compile_seconds":0.039601083,"constraints":18334,"negative_cases":"changed root, leaf, nonboolean direction, sibling rejected","proof_bytes":244,"prove_seconds":0.364612875,"scope":"membership only; excludes existing encryption, key provisioning, and registry acceptance","setup_seconds":4.000766625}
