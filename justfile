@@ -188,7 +188,7 @@ orbis-integration-preflight-binaries:
 
 # Build the binaries required by the Orbis integration flow.
 orbis-integration-build:
-    cargo build --release -p orbis-audit -p orbis-integration
+    cargo build --release -p orbis-integration
 
 # Bring up the Orbis stack for use with Bankd.
 orbis-integration-up:

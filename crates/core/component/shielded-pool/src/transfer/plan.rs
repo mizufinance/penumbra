@@ -116,19 +116,6 @@ impl TransferPlan {
         )
     }
 
-    #[cfg(feature = "poc-orbis")]
-    pub fn poc_orbis_audit_bundle(
-        &self,
-    ) -> anyhow::Result<Option<shieldd_sdk_compliance::PocOrbisAuditBundle>> {
-        self.validate()?;
-        let result = build_transfer_compliance(
-            &self.outputs,
-            &self.compliance,
-            self.is_disclosed_to_issuer(),
-        )?;
-        Ok(result.poc_orbis_audit_bundle)
-    }
-
     pub fn spend_randomizers(&self) -> impl Iterator<Item = Fr> + '_ {
         self.spends.iter().map(|spend| spend.randomizer)
     }

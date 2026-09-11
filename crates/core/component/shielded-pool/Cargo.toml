@@ -29,7 +29,6 @@ parallel = [
     "decaf377/parallel",
 ]
 docsrs = []
-poc-orbis = ["shieldd-sdk-compliance/poc-orbis"]
 
 [dependencies]
 anyhow = {workspace = true}

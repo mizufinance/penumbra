@@ -39,7 +39,6 @@ log_success "Runtime dependencies found"
 
 if [ "$require_binaries" -eq 1 ]; then
     for bin in \
-        "$COMPLIANCE_REPO_ROOT/target/release/orbis-audit" \
         "$COMPLIANCE_REPO_ROOT/target/release/orbis-integration"
     do
         if [ ! -x "$bin" ]; then

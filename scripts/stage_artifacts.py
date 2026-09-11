@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GROUPS = {
     "native": ["shieldd"],
     "provers": ["bankd-e2e-spend-builder", "bankd-e2e-host-withdrawal-builder"],
-    "audit": ["orbis-audit", "orbis-integration"],
+    "audit": ["orbis-integration"],
 }
 
 GNARK_LIBRARIES = {

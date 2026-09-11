@@ -8,7 +8,7 @@ use cnidarium::Storage;
 use decaf377::{Element, Encoding, Fq, Fr};
 use decaf377_rdsa::{SigningKey, SpendAuth, VerificationKey};
 use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use shieldd_sdk_app::SUBSTORE_PREFIXES;
 use shieldd_sdk_asset::{asset, Value};
 use shieldd_sdk_compliance::{
@@ -16,7 +16,7 @@ use shieldd_sdk_compliance::{
         AssetRegistrationGrant, AssetRegistrationGrantBody, MsgRegisterAsset, MsgRegisterUser,
         OrbisCapabilityCertificate, UserRegistrationGrant, UserRegistrationGrantBody,
     },
-    ComplianceLeaf, DetectionKey, PocOrbisAuditBundle,
+    ComplianceLeaf, DetectionKey,
 };
 use shieldd_sdk_keys::{keys::SpendKey, test_keys, Address};
 use shieldd_sdk_mock_client::MockClient;
@@ -36,7 +36,6 @@ struct Opt {
 
 struct BuiltTx {
     tx: Transaction,
-    audit_bundle: Option<PocOrbisAuditBundle>,
 }
 
 enum Operation {
@@ -44,7 +43,6 @@ enum Operation {
         send_amount: Amount,
         recipient: Address,
         sender_spend_key: Option<SpendKey>,
-        audit_bundle: Option<PathBuf>,
     },
     RegisterAsset {
         ring: PathBuf,
@@ -77,33 +75,10 @@ struct UserRegistrationInput {
     capability_certificate_hex: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuditBundleOutput {
-    shieldd_tx_hash: String,
-    action_index: u32,
-    output_index: u32,
-    bundle: PocOrbisAuditBundle,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt = parse_args()?;
     let built = build_tx(&opt).await?;
-
-    if let Operation::Spend {
-        audit_bundle: Some(path),
-        ..
-    } = &opt.operation
-    {
-        write_audit_bundle(
-            path,
-            &built.tx,
-            built
-                .audit_bundle
-                .context("regulated transfer did not produce an Orbis audit bundle")?,
-        )?;
-    }
 
     println!("{}", STANDARD.encode(built.tx.encode_to_vec()));
     Ok(())
@@ -139,16 +114,10 @@ fn parse_args() -> Result<Opt> {
         }
         Some("spend") => {
             let send_amount = parse_amount(args.next())?;
-            let mut audit_bundle = None;
             let mut recipient = test_keys::ADDRESS_1.deref().clone();
             let mut sender_spend_key = None;
             while let Some(arg) = args.next() {
                 match arg.as_str() {
-                    "--audit-bundle" => {
-                        audit_bundle = Some(PathBuf::from(
-                            args.next().context("--audit-bundle requires a path")?,
-                        ));
-                    }
                     "--recipient" => recipient = parse_address(args.next())?,
                     "--sender-spend-key-file" => {
                         sender_spend_key = Some(read_spend_key_file(PathBuf::from(
@@ -163,7 +132,6 @@ fn parse_args() -> Result<Opt> {
                 send_amount,
                 recipient,
                 sender_spend_key,
-                audit_bundle,
             }
         }
         // Preserve the original e2e interface where the optional third argument
@@ -172,13 +140,11 @@ fn parse_args() -> Result<Opt> {
             send_amount: parse_amount(Some(raw.to_owned()))?,
             recipient: test_keys::ADDRESS_1.deref().clone(),
             sender_spend_key: None,
-            audit_bundle: None,
         },
         None => Operation::Spend {
             send_amount: Amount::from(1u64),
             recipient: test_keys::ADDRESS_1.deref().clone(),
             sender_spend_key: None,
-            audit_bundle: None,
         },
     };
 
@@ -258,7 +224,6 @@ async fn build_tx(opt: &Opt) -> Result<BuiltTx> {
                 register_asset_action(read_ring(ring)?)?,
             )
             .await?,
-            audit_bundle: None,
         }),
         Operation::RegisterUsers {
             ring,
@@ -282,7 +247,6 @@ async fn build_tx(opt: &Opt) -> Result<BuiltTx> {
                 .collect::<Result<Vec<_>>>()?;
             Ok(BuiltTx {
                 tx: build_registration_tx(&client, &opt.chain_id, actions).await?,
-                audit_bundle: None,
             })
         }
     }
@@ -361,11 +325,7 @@ async fn build_spend_tx(
         .witness_auth_build(&plan)
         .await
         .context("failed to build Shieldd spend transaction")?;
-    let audit_bundle = match plan.actions.first() {
-        Some(ActionPlan::Transfer(transfer)) => transfer.poc_orbis_audit_bundle()?,
-        _ => None,
-    };
-    Ok(BuiltTx { tx, audit_bundle })
+    Ok(BuiltTx { tx })
 }
 
 async fn build_registration_tx(
@@ -533,19 +493,4 @@ fn read_ring(path: &PathBuf) -> Result<RingInput> {
         &fs::read(path).with_context(|| format!("failed to read {}", path.display()))?,
     )
     .with_context(|| format!("failed to parse {}", path.display()))
-}
-
-fn write_audit_bundle(path: &PathBuf, tx: &Transaction, bundle: PocOrbisAuditBundle) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let output = AuditBundleOutput {
-        shieldd_tx_hash: tx.id().to_string(),
-        action_index: 0,
-        output_index: 0,
-        bundle,
-    };
-    fs::write(path, serde_json::to_vec_pretty(&output)?)
-        .with_context(|| format!("failed to write {}", path.display()))
 }

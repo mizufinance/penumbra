@@ -164,15 +164,6 @@ pub mod decode_object;
 pub mod transfer_audit;
 pub use decode_object::{TransferComplianceMetadata, TRANSFER_COMPLIANCE_METADATA_BYTES};
 
-#[cfg(feature = "poc-orbis")]
-pub mod poc_orbis_audit;
-#[cfg(feature = "poc-orbis")]
-pub use poc_orbis_audit::{
-    build_poc_orbis_audit_package, decrypt_reencrypted_seed, parse_element,
-    validate_decrypted_seed, PocOrbisAccess, PocOrbisAuditBundle, PocOrbisAuditPackage,
-    PocOrbisSecretEnvelope, PocOrbisStoredAuditPackage, PocOrbisTier, PocOrbisTierBundle,
-};
-
 /// Create valid IMT non-membership proof for an unregulated asset.
 ///
 /// Returns (asset_anchor, indexed_leaf, merkle_path, position) that satisfy circuit constraints.
