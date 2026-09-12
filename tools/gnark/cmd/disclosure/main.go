@@ -127,13 +127,13 @@ func run() error {
 		p := groth16.NewProof(ecc.BLS12_377)
 		reader := bytes.NewReader(r.Proof)
 		if _, e = p.ReadFrom(reader); e != nil {
-			return errors.New("invalid proof")
+			return json.NewEncoder(os.Stdout).Encode(response{Verified: false})
 		}
 		if reader.Len() != 0 {
-			return errors.New("trailing proof bytes")
+			return json.NewEncoder(os.Stdout).Encode(response{Verified: false})
 		}
 		if e = groth16.Verify(p, vk, pub); e != nil {
-			return errors.New("proof rejected")
+			return json.NewEncoder(os.Stdout).Encode(response{Verified: false})
 		}
 		return json.NewEncoder(os.Stdout).Encode(response{Verified: true})
 	}

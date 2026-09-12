@@ -10,6 +10,16 @@ use std::{
 
 pub const CIRCUIT_ID: &str = "shieldd.disclosure.bls12-377.groth16.v1.32";
 
+/// The local verifier could not run reliably; this is not an invalid disclosure.
+#[derive(Debug)]
+pub struct VerificationUnavailable;
+impl std::fmt::Display for VerificationUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("local disclosure verification unavailable")
+    }
+}
+impl std::error::Error for VerificationUnavailable {}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
@@ -331,7 +341,6 @@ fn backend(op: &str, assignment: Assignment, proof: &[u8]) -> Result<BackendResp
         "backend output too large"
     );
     let response: BackendResponse = serde_json::from_slice(&out.stdout)?;
-    ensure!(response.verified, "backend rejected proof");
     ensure!(
         op != "verify" || response.proof.is_empty(),
         "unexpected proof output"
@@ -350,13 +359,15 @@ pub fn verify(package: &DisclosurePackage) -> Result<VerificationResult> {
             control_signatures,
         } => {
             ensure!(circuit == CIRCUIT_ID, "unsupported circuit");
-            let (_, m) = artifacts()?;
+            let (_, m) = artifacts().context(VerificationUnavailable)?;
             ensure!(
                 verification_key_sha256 == &m.vk_sha256,
                 "wrong verification key"
             );
             ensure!(proof.len() <= 4096, "proof too large");
-            backend("verify", assignment(&package.statement, None)?, proof)?;
+            let response = backend("verify", assignment(&package.statement, None)?, proof)
+                .context(VerificationUnavailable)?;
+            ensure!(response.verified, "backend rejected proof");
             verify_controls(&package.statement, control_signatures)?;
         }
         Evidence::Openings {
@@ -485,8 +496,9 @@ pub fn export_payload_keys(w: &DisclosureWitness) -> Result<DisclosurePackage> {
 pub fn prove(w: &DisclosureWitness) -> Result<DisclosurePackage> {
     let statement = evaluate(w)?;
     let private = openings(w)?;
-    let (_, m) = artifacts()?;
+    let (_, m) = artifacts().context(VerificationUnavailable)?;
     let response = backend("prove", assignment(&statement, Some(&private))?, &[])?;
+    ensure!(response.verified, "backend rejected proof");
     let p = DisclosurePackage {
         version: VERSION,
         statement,

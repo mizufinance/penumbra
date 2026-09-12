@@ -122,6 +122,43 @@ async fn accepted_disclosure_opening() -> Result<()> {
     run_disclosure(false).await
 }
 
+async fn machine(
+    binary: &str,
+    home: &Utf8Path,
+    package: &disclosure::DisclosurePackage,
+    node: &str,
+) -> Result<serde_json::Value> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new(binary)
+        .args([
+            "--home",
+            home.as_str(),
+            "disclosure",
+            "verify-machine",
+            "--node",
+            node,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let input = serde_json::to_vec(
+        &serde_json::json!({"version":2,"package":package,"request":package.statement.request}),
+    )?;
+    child
+        .stdin
+        .take()
+        .context("stdin")?
+        .write_all(&input)
+        .await?;
+    let output = child.wait_with_output().await?;
+    ensure!(
+        output.status.success(),
+        "machine verification process failed"
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
 async fn run_disclosure(prove: bool) -> Result<()> {
     if std::env::var_os("BANKD_DISCLOSURE_TEST_BIN").is_some() {
         for name in ["BANKD_AUDIT_CLI", "DEFRA_TEST_BIN", "VERA_TEST_FIXTURE"] {
@@ -312,7 +349,50 @@ async fn run_disclosure(prove: bool) -> Result<()> {
         claim.amount = true;
         claim.asset = true;
         claim.recipient = true;
-        disclosure::verify(&disclosure::export_openings(&full)?)?;
+        let package = disclosure::export_openings(&full)?;
+        disclosure::verify(&package)?;
+        let binary = std::env::var("SHIELDD_PCLI_BIN").context("set SHIELDD_PCLI_BIN")?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(CommittedQueries {
+                    parameters: pb::AppParametersResponse {
+                        app_parameters: Some(snapshot.get_app_params().await?.into()),
+                    },
+                    block: accepted,
+                })
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let result = machine(&binary, &recipient, &package, &endpoint).await?;
+        ensure!(
+            result["status"] == "verified",
+            "accepted opening not verified: {result}"
+        );
+        let mut changed = package.clone();
+        changed.statement.request.chain_id = "wrong-chain".into();
+        let result = machine(&binary, &recipient, &changed, &endpoint).await?;
+        ensure!(
+            result["status"] == "rejected" && result["result"]["acceptance"] == "Rejected",
+            "chain mismatch not rejected: {result}"
+        );
+        let mut changed = package.clone();
+        changed.statement.request.outputs[0]
+            .reference
+            .transaction_id = "ff".repeat(32);
+        changed.statement.outputs[0].public.reference.transaction_id = "ff".repeat(32);
+        let result = machine(&binary, &recipient, &changed, &endpoint).await?;
+        ensure!(
+            result["status"] == "rejected" && result["result"]["acceptance"] == "Rejected",
+            "transaction mismatch not rejected: {result}"
+        );
+        server.abort();
+        let _ = server.await;
+        let result = machine(&binary, &recipient, &package, &endpoint).await?;
+        ensure!(
+            result["status"] == "unresolved",
+            "node outage not unresolved: {result}"
+        );
         return Ok(());
     }
     let binary = std::env::var("SHIELDD_PCLI_BIN")

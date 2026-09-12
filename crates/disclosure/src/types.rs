@@ -153,6 +153,7 @@ pub enum Evidence {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Acceptance {
     NotChecked,
+    Rejected,
     Confirmed { chain_id: String, heights: Vec<u64> },
 }
 

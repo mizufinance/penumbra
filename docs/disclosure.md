@@ -46,6 +46,15 @@ records and chain identity. A cryptographically valid disclosure without that
 check is not fully verified. `verify_candidates` checks encrypted transaction
 bytes obtained from Shinzo without treating indexer records as execution evidence.
 
+`pcli disclosure verify-machine --node URL` accepts one bounded JSON request on
+private stdin: `version: 2`, `package`, optional expected `request`, and optional
+base64 canonical `transactions` retrieved through Shinzo. It returns the verified
+statement, method, circuit identity and acceptance result in one response.
+`rejected` means invalid evidence or a definitive accepted-data mismatch;
+`unresolved` means acceptance data could not be obtained; `unavailable` means the
+local verifier could not run reliably. Only `verified` establishes both checks.
+The SDK exposes `VerificationUnavailable` for local artifact/backend failures.
+
 Bankd exposes `mizufinance.shieldd.v1.Query/TransactionsByHeight` through the
 embedded Shieldd adapter. An indexed success code, database CID, or indexer
 signature alone does not authenticate successful Shieldd execution.

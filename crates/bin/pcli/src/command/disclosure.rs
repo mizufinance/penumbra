@@ -66,6 +66,11 @@ pub enum DisclosureCmd {
     },
     /// Describe unverified claims and decryption capabilities without loading a wallet.
     Inspect { package: Utf8PathBuf },
+    /// Verify a bounded machine request from private stdin.
+    VerifyMachine {
+        #[clap(long)]
+        node: String,
+    },
     /// Verify cryptography and optionally acceptance using a chosen Bankd gRPC endpoint.
     Verify {
         package: Utf8PathBuf,
@@ -161,12 +166,25 @@ fn publish(path: &Utf8Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn check_request(package: &sdk::DisclosurePackage, expected: Option<&Utf8Path>) -> Result<()> {
-    if let Some(path) = expected {
-        let request: sdk::DisclosureRequest =
-            serde_json::from_slice(&read_bounded(path, sdk::MAX_DOCUMENT_BYTES)?)?;
-        sdk::validate_request(&request)?;
+    let request = expected
+        .map(|path| -> Result<sdk::DisclosureRequest> {
+            Ok(serde_json::from_slice(&read_bounded(
+                path,
+                sdk::MAX_DOCUMENT_BYTES,
+            )?)?)
+        })
+        .transpose()?;
+    check_expected(package, request.as_ref())
+}
+
+fn check_expected(
+    package: &sdk::DisclosurePackage,
+    expected: Option<&sdk::DisclosureRequest>,
+) -> Result<()> {
+    if let Some(request) = expected {
+        sdk::validate_request(request)?;
         ensure!(
-            package.statement.request == request,
+            &package.statement.request == request,
             "disclosure does not match the recipient's request"
         );
     } else {
@@ -240,6 +258,118 @@ async fn accepted_blocks(
     Ok((chain_id, blocks))
 }
 
+#[derive(Debug)]
+struct AcceptanceMismatch;
+impl std::fmt::Display for AcceptanceMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("accepted transaction data mismatch")
+    }
+}
+impl std::error::Error for AcceptanceMismatch {}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MachineVerification {
+    version: u32,
+    package: sdk::DisclosurePackage,
+    request: Option<sdk::DisclosureRequest>,
+    #[serde(default)]
+    transactions: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MachineStatus {
+    Verified,
+    Rejected,
+    Unresolved,
+    Unavailable,
+}
+
+#[derive(serde::Serialize)]
+struct MachineResult {
+    protocol: u32,
+    package_version: u32,
+    circuit: &'static str,
+    development_artifacts: bool,
+    status: MachineStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<sdk::VerificationResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    statement: Option<sdk::DisclosureStatement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    method: Option<&'static str>,
+}
+
+async fn verify_machine(input: &[u8], node: &str) -> MachineResult {
+    let mut response = MachineResult {
+        protocol: 2,
+        package_version: sdk::VERSION,
+        circuit: sdk::CIRCUIT_ID,
+        development_artifacts: cfg!(all(
+            feature = "development-disclosure-artifacts",
+            debug_assertions
+        )),
+        status: MachineStatus::Rejected,
+        result: None,
+        statement: None,
+        method: None,
+    };
+    let verified = (|| -> Result<(sdk::DisclosurePackage, sdk::VerificationResult)> {
+        use base64::Engine;
+        let input: MachineVerification = serde_json::from_slice(input)?;
+        ensure!(input.version == 2, "unsupported machine protocol");
+        let package = input.package;
+        ensure!(
+            package.version == sdk::VERSION,
+            "unsupported disclosure version"
+        );
+        sdk::validate_request(&package.statement.request)?;
+        check_expected(&package, input.request.as_ref())?;
+        let candidates = input
+            .transactions
+            .iter()
+            .map(|b| {
+                let raw = base64::engine::general_purpose::STANDARD.decode(b)?;
+                shieldd_sdk_transaction::Transaction::decode_canonical(&raw)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if !candidates.is_empty() {
+            sdk::verify_candidates(&package.statement, &candidates)?;
+        }
+        let result = sdk::verify(&package)?;
+        Ok((package, result))
+    })();
+    let (package, mut result) = match verified {
+        Ok(value) => value,
+        Err(error) => {
+            if error.is::<sdk::VerificationUnavailable>() {
+                response.status = MachineStatus::Unavailable;
+            }
+            return response;
+        }
+    };
+    response.status = match acceptance(&package, node).await {
+        Ok(accepted) => {
+            result.acceptance = accepted;
+            MachineStatus::Verified
+        }
+        Err(error) if error.is::<AcceptanceMismatch>() => {
+            result.acceptance = sdk::Acceptance::Rejected;
+            MachineStatus::Rejected
+        }
+        Err(_) => MachineStatus::Unresolved,
+    };
+    response.result = Some(result);
+    response.statement = Some(package.statement);
+    response.method = Some(match package.evidence {
+        sdk::Evidence::Groth16 { .. } => "Groth16",
+        sdk::Evidence::Openings { .. } => "Openings",
+        sdk::Evidence::PayloadKeys { .. } => "PayloadKeys",
+    });
+    response
+}
+
 async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk::Acceptance> {
     let heights = package
         .statement
@@ -250,6 +380,7 @@ async fn acceptance(package: &sdk::DisclosurePackage, node: &str) -> Result<sdk:
         .collect();
     let (chain_id, blocks) = accepted_blocks(node, heights).await?;
     sdk::confirm_acceptance(&package.statement, &chain_id, &blocks)
+        .map_err(|_| AcceptanceMismatch.into())
 }
 
 async fn asset_policy(
@@ -295,6 +426,16 @@ async fn asset_policy(
 impl DisclosureCmd {
     pub async fn exec(&self, home: &Utf8Path) -> Result<()> {
         match self {
+            Self::VerifyMachine { node } => {
+                let input = zeroize::Zeroizing::new(read_bounded(
+                    Utf8Path::new("-"),
+                    sdk::MAX_PACKAGE_BYTES,
+                )?);
+                println!(
+                    "{}",
+                    serde_json::to_string(&verify_machine(&input, node).await)?
+                );
+            }
             Self::IssuerCreate { node, output } => {
                 #[derive(serde::Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -497,6 +638,9 @@ impl DisclosureCmd {
                     match acceptance(&package, node).await {
                         Ok(acceptance) => result.acceptance = acceptance,
                         Err(error) => {
+                            if error.is::<AcceptanceMismatch>() {
+                                result.acceptance = sdk::Acceptance::Rejected;
+                            }
                             println!("{}", serde_json::to_string_pretty(&result)?);
                             return Err(error).context(
                                 "cryptography verified; node acceptance could not be confirmed",

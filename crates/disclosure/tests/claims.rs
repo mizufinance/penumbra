@@ -345,3 +345,115 @@ fn release_rejects_development_artifacts() {
         .to_string()
         .contains("no approved production disclosure setup"));
 }
+
+#[cfg(all(
+    feature = "proof",
+    feature = "development-artifacts",
+    debug_assertions,
+    unix
+))]
+#[test]
+fn backend_failures_are_not_invalid_proofs() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("disclosure-backend-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let old_artifacts = std::env::var_os("SHIELDD_DISCLOSURE_ARTIFACTS");
+    let old_backend = std::env::var_os("SHIELDD_DISCLOSURE_BACKEND");
+    let mut package = DisclosurePackage {
+        version: VERSION,
+        statement: evaluate(&fixture()).unwrap(),
+        evidence: Evidence::Groth16 {
+            circuit: CIRCUIT_ID.into(),
+            verification_key_sha256: "00".repeat(32),
+            proof: vec![],
+            control_signatures: vec![None],
+        },
+    };
+    std::env::set_var("SHIELDD_DISCLOSURE_ARTIFACTS", root.join("absent"));
+    assert!(verify(&package)
+        .unwrap_err()
+        .is::<VerificationUnavailable>());
+    std::fs::write(root.join("manifest.json"), serde_json::to_vec(&serde_json::json!({"circuit":CIRCUIT_ID,"development":true,"vk_sha256":"00".repeat(32),"pk_sha256":"00".repeat(32)})).unwrap()).unwrap();
+    std::env::set_var("SHIELDD_DISCLOSURE_ARTIFACTS", &root);
+    std::env::set_var("SHIELDD_DISCLOSURE_BACKEND", root.join("missing"));
+    assert!(verify(&package)
+        .unwrap_err()
+        .is::<VerificationUnavailable>());
+    let backend = root.join("backend");
+    std::env::set_var("SHIELDD_DISCLOSURE_BACKEND", &backend);
+    for output in [
+        "exit 2",
+        "printf 'not json'",
+        "printf '{\"verified\":false}'",
+    ] {
+        std::fs::write(&backend, format!("#!/bin/sh\ncat >/dev/null\n{output}\n")).unwrap();
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = verify(&package).unwrap_err();
+        assert_eq!(
+            error.is::<VerificationUnavailable>(),
+            !output.contains("false")
+        );
+    }
+    if let Evidence::Groth16 { circuit, .. } = &mut package.evidence {
+        *circuit = "wrong".into();
+    }
+    assert!(!verify(&package)
+        .unwrap_err()
+        .is::<VerificationUnavailable>());
+    for (name, value) in [
+        ("SHIELDD_DISCLOSURE_ARTIFACTS", old_artifacts),
+        ("SHIELDD_DISCLOSURE_BACKEND", old_backend),
+    ] {
+        match value {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(feature = "prover")]
+#[test]
+#[ignore = "requires development artifacts, backend and pcli; generates one real proof"]
+fn real_machine_verification_outcomes() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut package = prove(&fixture()).unwrap();
+    let binary = std::env::var("SHIELDD_PCLI_BIN").unwrap();
+    let check = |package: &DisclosurePackage, missing: bool| {
+        let mut command = Command::new(&binary);
+        command
+            .args([
+                "disclosure",
+                "verify-machine",
+                "--node",
+                "http://127.0.0.1:1",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if missing {
+            command.env(
+                "SHIELDD_DISCLOSURE_BACKEND",
+                "/nonexistent/disclosure-backend",
+            );
+        }
+        let mut child = command.spawn().unwrap();
+        let input =
+            serde_json::to_vec(&serde_json::json!({"version":2,"package":package})).unwrap();
+        child.stdin.take().unwrap().write_all(&input).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    assert!(verify(&package).unwrap().cryptography_verified);
+    assert_eq!(check(&package, false)["status"], "unresolved");
+    assert_eq!(check(&package, true)["status"], "unavailable");
+    if let Evidence::Groth16 { proof, .. } = &mut package.evidence {
+        proof.truncate(3);
+    }
+    assert!(!verify(&package)
+        .unwrap_err()
+        .is::<VerificationUnavailable>());
+    assert_eq!(check(&package, false)["status"], "rejected");
+}
